@@ -34,23 +34,49 @@
     .practice-history-scroll{scrollbar-width:thin}
     #view::-webkit-scrollbar{width:8px}
     #view::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+
+    /* 手机端：侧栏变抽屉，主内容全宽 */
+    .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:40}
+    body.drawer-open{overflow:hidden}
+    body.drawer-open .sidebar-overlay{display:block}
+    @media (max-width:767px){
+      #app-shell{display:block;height:100%;position:relative}
+      #sidebar{
+        position:fixed;top:0;left:0;bottom:0;width:min(18rem,82vw);z-index:50;
+        transform:translateX(-105%);transition:transform .22s ease;
+        box-shadow:none;
+      }
+      body.drawer-open #sidebar{transform:translateX(0);box-shadow:8px 0 24px rgba(15,23,42,.2)}
+      #main-pane{height:100%;width:100%;min-width:0}
+      #page-subtitle{display:none}
+      #today-date{display:none}
+    }
+    @media (min-width:768px){
+      #menu-btn{display:none!important}
+      .sidebar-overlay{display:none!important}
+      #sidebar{transform:none!important;position:relative;box-shadow:none!important}
+    }
   </style>
 </head>
 <body class="h-screen bg-slate-50 text-slate-800 font-sans antialiased">
-  <div class="flex h-full">
-    <aside class="w-64 shrink-0 bg-brand-600 text-white flex flex-col">
-      <div class="h-16 flex items-center gap-3 px-6 border-b border-white/10">
-        <div class="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center font-bold text-lg">G</div>
-        <div>
-          <p class="font-semibold leading-tight">GRE 备考</p>
-          <p class="text-xs text-white/60 leading-tight">智能学习助手</p>
+  <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
+  <div id="app-shell" class="flex h-full">
+    <aside id="sidebar" class="w-64 shrink-0 bg-brand-600 text-white flex flex-col">
+      <div class="h-16 flex items-center justify-between gap-3 px-5 border-b border-white/10">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center font-bold text-lg shrink-0">G</div>
+          <div class="min-w-0">
+            <p class="font-semibold leading-tight">GRE 备考</p>
+            <p class="text-xs text-white/60 leading-tight">智能学习助手</p>
+          </div>
         </div>
+        <button id="drawer-close" type="button" class="md:hidden w-9 h-9 rounded-lg bg-white/10 text-white text-xl leading-none" aria-label="关闭菜单">×</button>
       </div>
       <div class="px-4 py-3 border-b border-white/10">
         <p class="text-[10px] uppercase tracking-wider text-white/40 mb-1">当前词书</p>
         <p id="active-book-name" class="text-sm font-semibold text-white truncate">KMF 核心词</p>
       </div>
-      <nav id="nav" class="flex-1 px-3 py-4 space-y-1 text-sm"></nav>
+      <nav id="nav" class="flex-1 px-3 py-4 space-y-1 text-sm overflow-y-auto"></nav>
       <div class="px-6 py-4 border-t border-white/10 text-xs text-white/70">
         <p class="mb-1">今日目标</p>
         <div class="h-1.5 rounded-full bg-white/15 overflow-hidden">
@@ -60,15 +86,18 @@
       </div>
     </aside>
 
-    <div class="flex-1 flex flex-col min-w-0">
-      <header class="h-16 shrink-0 bg-white border-b border-slate-200 flex items-center justify-between px-8">
-        <div>
-          <h1 id="page-title" class="text-lg font-semibold text-slate-900">首页 Dashboard</h1>
-          <p id="page-subtitle" class="text-xs text-slate-400"></p>
+    <div id="main-pane" class="flex-1 flex flex-col min-w-0">
+      <header class="h-14 md:h-16 shrink-0 bg-white border-b border-slate-200 flex items-center justify-between gap-3 px-3 md:px-8">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="menu-btn" type="button" class="shrink-0 w-10 h-10 rounded-lg border border-slate-200 text-slate-700 text-lg hover:bg-slate-50" aria-label="打开菜单">☰</button>
+          <div class="min-w-0">
+            <h1 id="page-title" class="text-base md:text-lg font-semibold text-slate-900 truncate">首页 Dashboard</h1>
+            <p id="page-subtitle" class="text-xs text-slate-400 truncate"></p>
+          </div>
         </div>
-        <span id="today-date" class="text-sm text-slate-500"></span>
+        <span id="today-date" class="text-sm text-slate-500 shrink-0"></span>
       </header>
-      <main id="view" class="flex-1 overflow-y-auto p-6 md:p-8"></main>
+      <main id="view" class="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8"></main>
     </div>
   </div>
 
@@ -417,7 +446,7 @@ function paintVocabCard(root){
     <div id="vcard" class="relative w-full cursor-pointer" style="height:${w.contextSentence?'28rem':'22rem'};perspective:1200px">
       <div id="vinner" class="relative w-full h-full" style="transition:transform .5s;transform-style:preserve-3d">
         <div class="absolute inset-0 rounded-3xl border ${face.border} shadow-sm flex flex-col items-center justify-center" style="background:${face.bg};backface-visibility:hidden">
-          <div class="flex items-center gap-3"><h2 class="text-5xl font-bold">${escapeHtml(w.word)}</h2><button data-speak class="text-2xl">🔊</button></div>
+          <div class="flex items-center gap-2 sm:gap-3 px-2"><h2 class="text-3xl sm:text-5xl font-bold break-all text-center">${escapeHtml(w.word)}</h2><button data-speak class="text-2xl shrink-0">🔊</button></div>
           <p class="text-slate-400 mt-3">${escapeHtml(w.phonetic||'')}</p>
           <p class="absolute bottom-6 text-xs text-slate-300">点击查看释义</p>
         </div>
@@ -654,13 +683,22 @@ function mountSettings(root){
 const mounts = { vocab:mountVocab, mistakes:mountMistakes, practice:mountPractice, sentence:mountSentence, settings:mountSettings };
 const renders = { dashboard:renderDashboard, vocab:renderVocab, mistakes:renderMistakes, practice:renderPractice, sentence:renderSentence, settings:renderSettings };
 
+function openDrawer(){ document.body.classList.add('drawer-open'); }
+function closeDrawer(){ document.body.classList.remove('drawer-open'); }
+
 function renderNav(active){
   document.getElementById('nav').innerHTML = routes.map(r=>`
     <a href="#/${r.key}" class="nav-item ${r.key===active?'active':''}"><span>${r.icon}</span><span>${r.label}</span></a>`).join('');
+  document.querySelectorAll('#nav .nav-item').forEach(a=>{
+    a.addEventListener('click', ()=> closeDrawer());
+  });
 }
 function renderChrome(){
   const task=getTodayTask();
-  document.getElementById('today-date').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
+  const dateEl=document.getElementById('today-date');
+  if(dateEl){
+    dateEl.textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
+  }
   document.getElementById('active-book-name').textContent=task.bookName;
   const denom=task.todayGoal||1;
   const pct=Math.min(100, Math.round((task.learnedToday/denom)*100));
@@ -670,6 +708,7 @@ function renderChrome(){
 function renderRoute(){
   detachVocabKey();
   if(activeTip){ activeTip.remove(); activeTip=null; }
+  closeDrawer();
   const key=(location.hash.replace('#/','')||'dashboard').trim();
   const route=routes.find(r=>r.key===key)||routes[0];
   renderNav(route.key);
@@ -679,6 +718,12 @@ function renderRoute(){
   view.innerHTML = (renders[route.key]||renderDashboard)();
   (mounts[route.key]||(()=>{}))(view);
 }
+
+document.getElementById('menu-btn')?.addEventListener('click', openDrawer);
+document.getElementById('drawer-close')?.addEventListener('click', closeDrawer);
+document.getElementById('sidebar-overlay')?.addEventListener('click', closeDrawer);
+window.addEventListener('resize', ()=>{ if(window.innerWidth>=768) closeDrawer(); });
+
 window.addEventListener('hashchange', renderRoute);
 window.addEventListener('gre:progress', renderChrome);
 if(!location.hash) location.hash='#/dashboard';
