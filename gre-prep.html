@@ -120,12 +120,13 @@
       border-radius:1.35rem;
     }
     .glass-sidebar{
-      background:rgba(90,111,100,.42);
-      backdrop-filter:blur(24px) saturate(1.2);
-      -webkit-backdrop-filter:blur(24px) saturate(1.2);
+      /* 桌面可半透明；手机必须不透明，否则字糊成一团 */
+      background:rgba(62,78,70,.92);
+      backdrop-filter:blur(18px) saturate(1.1);
+      -webkit-backdrop-filter:blur(18px) saturate(1.1);
       border-right:1px solid rgba(255,255,255,.28);
       color:#f7f4ef;
-      box-shadow:8px 0 40px rgba(58,56,53,.08);
+      box-shadow:8px 0 40px rgba(58,56,53,.12);
     }
 
     .nav-item{
@@ -219,13 +220,23 @@
     @media (max-width:767px){
       #app-shell{display:block;height:100%;position:relative}
       #sidebar{
-        position:fixed;top:0;left:0;bottom:0;width:min(18rem,82vw);z-index:50;
+        position:fixed;top:0;left:0;bottom:0;width:min(17.5rem,78vw);z-index:50;
         transform:translateX(-105%);
         transition:transform .55s var(--spring);
+        /* 手机侧栏：实心莫兰迪石绿，关闭毛玻璃，保证可读 */
+        background:#3e4e46 !important;
+        backdrop-filter:none !important;
+        -webkit-backdrop-filter:none !important;
+        opacity:1 !important;
+        box-shadow:12px 0 32px rgba(58,56,53,.28);
       }
+      #sidebar .nav-item{color:rgba(247,244,239,.92)}
+      #sidebar .nav-item.active{background:rgba(255,255,255,.18);color:#fff}
+      #sidebar #active-book-name,#sidebar .font-display{color:#fff}
       body.drawer-open #sidebar{transform:translateX(0)}
       #main-pane{height:100%;width:100%;min-width:0}
       #page-subtitle,#today-date{display:none}
+      .sidebar-overlay{backdrop-filter:none;background:rgba(58,56,53,.45)}
     }
     @media (min-width:768px){
       #menu-btn{display:none!important}
@@ -317,7 +328,15 @@
   </div>
 
 <script type="module">
-const STORAGE_KEY = 'gre-single-v1';
+const STORAGE_KEY = 'gre-single-v2';
+const LEGACY_STORAGE_KEY = 'gre-single-v1';
+/** 旧版内置样例词：加载时强制剔除，默认永远 0 词起 */
+const LEGACY_SEED_WORDS = new Set([
+  'abate','aberrant','abscond','abstemious','admonish','aesthetic','alacrity','ameliorate',
+  'anachronism','anomaly','antipathy','apathy','appease','arbitrary','arduous','articulate',
+  'assuage','audacious','austere','belie','brandnewword'
+]);
+
 const AUTH_KEY = 'gre-single-auth-v1';
 const GIST_MARKER = 'GRE-PREP-SYNC-v1';
 const GIST_FILENAME = 'gre-prep-data.json';
@@ -388,16 +407,47 @@ function countByTargetDay(){
   return map;
 }
 
+function stripLegacySeedWords(book){
+  if(!book || !Array.isArray(book.words)) return 0;
+  const before = book.words.length;
+  // 1) 整本都是旧样例（约 20 词且全在种子表）→ 直接清空
+  const allSeed = before > 0 && book.words.every(w => LEGACY_SEED_WORDS.has(String(w.word||'').toLowerCase()));
+  if(allSeed){
+    book.words = [];
+    return before;
+  }
+  // 2) 否则只删「无指定天数」的旧样例词，保留你自己导入并分配天数的词
+  book.words = book.words.filter(w=>{
+    const key = String(w.word||'').toLowerCase();
+    if(!LEGACY_SEED_WORDS.has(key)) return true;
+    if(w.targetDay != null && w.targetDay !== '') return true;
+    if(w.importOrder != null && Number(w.importOrder) > 20) return true;
+    return false;
+  });
+  return before - book.words.length;
+}
+
 function loadState(){
   try{
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    let fromLegacy = false;
+    if(!raw){
+      raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+      fromLegacy = !!raw;
+    }
     if(raw){
       const parsed = JSON.parse(raw);
       if(parsed?.wordbooks?.length){
         parsed.wordbooks.forEach(b=>{
           if(!Array.isArray(b.practiceHistory)) b.practiceHistory=[];
           if(!Array.isArray(b.words)) b.words=[];
+          stripLegacySeedWords(b);
         });
+        // 迁移到 v2，避免旧缓存反复带回样例词
+        try{
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+          if(fromLegacy) localStorage.removeItem(LEGACY_STORAGE_KEY);
+        }catch{}
         return parsed;
       }
     }
@@ -583,6 +633,20 @@ function advanceDay(){
   const book = activeBook();
   if(book.currentPlanDay < PLAN.TOTAL_DAYS){
     book.currentPlanDay += 1;
+    book.progress.wordsLearnedToday = 0;
+    book.progress.todayTarget = 0;
+    book.progress.todayTargetDate = null;
+    persist();
+    window.dispatchEvent(new Event('gre:progress'));
+    return true;
+  }
+  return false;
+}
+
+function retreatDay(){
+  const book = activeBook();
+  if(book.currentPlanDay > 1){
+    book.currentPlanDay -= 1;
     book.progress.wordsLearnedToday = 0;
     book.progress.todayTarget = 0;
     book.progress.todayTargetDate = null;
@@ -867,6 +931,7 @@ function applyRemoteState(payload){
   state.wordbooks.forEach(b=>{
     if(!Array.isArray(b.practiceHistory)) b.practiceHistory=[];
     if(!Array.isArray(b.words)) b.words=[];
+    stripLegacySeedWords(b);
   });
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   return true;
@@ -1405,8 +1470,11 @@ function renderSettings(){
       <p class="text-sm text-slate-400 mt-1">当前第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 词库 ${getStats().total} 词（默认空库，按天上传）</p>
       <p class="text-xs text-slate-500 mt-2">已导入：${Object.entries(countByTargetDay()).filter(([d,n])=>n>0).map(([d,n])=>`第${d}天 ${n}词`).join(" · ") || "尚未按天导入单词"}</p>
       <p class="text-xs text-emerald-700 mt-1">背词顺序：严格按你上传顺序，已关闭乱序。</p>
-      <button id="s-advance" class="mt-4 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">推进到下一天</button>
-      <span id="s-adv-msg" class="ml-2 text-xs text-slate-400"></span>
+      <div class="mt-4 flex flex-wrap items-center gap-2">
+        <button id="s-advance" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">推进到下一天</button>
+        <button id="s-retreat" class="border border-slate-300 bg-white/60 text-ink text-sm font-semibold px-4 py-2 rounded-lg">回到前一天</button>
+        <span id="s-adv-msg" class="text-xs text-slate-400"></span>
+      </div>
     </div>
 
     <div class="bg-white rounded-2xl p-6 border">
@@ -1505,6 +1573,13 @@ function mountSettings(root){
     const ok=advanceDay();
     root.querySelector('#s-adv-msg').textContent=ok?`已推进到第 ${activeBook().currentPlanDay} 天`:'已是最后一天';
     renderChrome();
+    setTimeout(()=>renderRoute(), 200);
+  });
+  root.querySelector('#s-retreat')?.addEventListener('click', ()=>{
+    const ok=retreatDay();
+    root.querySelector('#s-adv-msg').textContent=ok?`已回到第 ${activeBook().currentPlanDay} 天`:'已经是第 1 天';
+    renderChrome();
+    setTimeout(()=>renderRoute(), 200);
   });
   root.querySelector('#s-import-btn')?.addEventListener('click', ()=>{
     const lines=root.querySelector('#s-import').value.split(/\n/).map(l=>l.trim()).filter(Boolean);
