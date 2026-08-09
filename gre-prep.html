@@ -98,7 +98,8 @@
       to{transform:translateY(-6px);opacity:.65}
     }
 
-    #app-shell{position:relative;z-index:1;height:100%}
+    /* 注意：不要给 #app-shell 设 z-index，否则会把侧栏压在遮罩下面，导致手机点菜单等于点遮罩关闭 */
+    #app-shell{position:relative;height:100%;z-index:auto}
 
     /* 玻璃拟态 */
     .glass-panel{
@@ -214,34 +215,49 @@
       transition:width .7s var(--spring);
     }
 
-    .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(58,56,53,.35);backdrop-filter:blur(2px);z-index:40}
+    .sidebar-overlay{
+      display:none;position:fixed;inset:0;
+      background:rgba(58,56,53,.45);
+      z-index:40;
+      pointer-events:none;
+    }
     body.drawer-open{overflow:hidden}
-    body.drawer-open .sidebar-overlay{display:block}
+    body.drawer-open .sidebar-overlay{display:block;pointer-events:auto}
+    #sidebar{
+      position:relative;
+      z-index:60;
+      pointer-events:auto;
+    }
     @media (max-width:767px){
-      #app-shell{display:block;height:100%;position:relative}
+      #app-shell{display:block;height:100%;position:relative;z-index:auto}
       #sidebar{
-        position:fixed;top:0;left:0;bottom:0;width:min(17.5rem,78vw);z-index:50;
+        position:fixed;top:0;left:0;bottom:0;width:min(17.5rem,78vw);
+        z-index:60; /* 必须高于遮罩 40，否则点菜单=点遮罩关闭 */
         transform:translateX(-105%);
         transition:transform .55s var(--spring);
-        /* 手机侧栏：实心莫兰迪石绿，关闭毛玻璃，保证可读 */
         background:#3e4e46 !important;
         backdrop-filter:none !important;
         -webkit-backdrop-filter:none !important;
         opacity:1 !important;
         box-shadow:12px 0 32px rgba(58,56,53,.28);
+        pointer-events:auto;
       }
-      #sidebar .nav-item{color:rgba(247,244,239,.92)}
-      #sidebar .nav-item.active{background:rgba(255,255,255,.18);color:#fff}
+      #sidebar .nav-item{color:rgba(247,244,239,.95);pointer-events:auto}
+      #sidebar .nav-item.active{background:rgba(255,255,255,.2);color:#fff}
       #sidebar #active-book-name,#sidebar .font-display{color:#fff}
       body.drawer-open #sidebar{transform:translateX(0)}
-      #main-pane{height:100%;width:100%;min-width:0}
+      #main-pane{height:100%;width:100%;min-width:0;position:relative;z-index:1}
       #page-subtitle,#today-date{display:none}
-      .sidebar-overlay{backdrop-filter:none;background:rgba(58,56,53,.45)}
     }
     @media (min-width:768px){
       #menu-btn{display:none!important}
-      .sidebar-overlay{display:none!important}
-      #sidebar{transform:none!important;position:relative}
+      .sidebar-overlay{display:none!important;pointer-events:none!important}
+      #sidebar{
+        transform:none!important;
+        position:fixed;top:0;left:0;bottom:0;width:16rem;
+        z-index:30;
+      }
+      #sidebar-spacer{display:block}
     }
 
     /* 覆盖常见 Tailwind 实心白卡片为玻璃感（运行时 HTML 仍可用旧 class） */
@@ -282,33 +298,35 @@
 </head>
 <body class="h-screen text-ink font-sans antialiased">
   <div class="fountain-stage" aria-hidden="true"></div>
+  <!-- 遮罩与侧栏同级：侧栏 z-index 更高，避免手机点菜单却点到遮罩 -->
   <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
+  <aside id="sidebar" class="glass-sidebar w-64 shrink-0 flex flex-col">
+    <div class="h-16 flex items-center justify-between gap-3 px-5 border-b border-white/15">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center font-display text-lg shrink-0 shadow-inner">⛲</div>
+        <div class="min-w-0">
+          <p class="font-display font-semibold leading-tight tracking-tight">Fountain GRE</p>
+          <p class="text-[11px] text-white/65 leading-tight">静心备考工坊</p>
+        </div>
+      </div>
+      <button id="drawer-close" type="button" class="md:hidden w-9 h-9 rounded-xl bg-white/10 text-white text-xl leading-none" aria-label="关闭菜单">×</button>
+    </div>
+    <div class="px-4 py-3 border-b border-white/10">
+      <p class="text-[10px] uppercase tracking-[0.14em] text-white/45 mb-1">当前词书</p>
+      <p id="active-book-name" class="text-sm font-semibold text-white truncate">我的 GRE 词书</p>
+    </div>
+    <nav id="nav" class="flex-1 px-3 py-4 space-y-1 text-sm overflow-y-auto"></nav>
+    <div class="px-5 py-4 border-t border-white/10 text-xs text-white/75">
+      <p class="mb-1.5 tracking-wide">今日目标</p>
+      <div class="progress-track">
+        <div id="daily-progress-bar" class="progress-fill" style="width:0%"></div>
+      </div>
+      <p id="daily-progress-text" class="mt-1.5 text-white/55">尚未开始</p>
+    </div>
+  </aside>
   <div id="app-shell" class="flex h-full">
-    <aside id="sidebar" class="glass-sidebar w-64 shrink-0 flex flex-col">
-      <div class="h-16 flex items-center justify-between gap-3 px-5 border-b border-white/15">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center font-display text-lg shrink-0 shadow-inner">⛲</div>
-          <div class="min-w-0">
-            <p class="font-display font-semibold leading-tight tracking-tight">Fountain GRE</p>
-            <p class="text-[11px] text-white/65 leading-tight">静心备考工坊</p>
-          </div>
-        </div>
-        <button id="drawer-close" type="button" class="md:hidden w-9 h-9 rounded-xl bg-white/10 text-white text-xl leading-none" aria-label="关闭菜单">×</button>
-      </div>
-      <div class="px-4 py-3 border-b border-white/10">
-        <p class="text-[10px] uppercase tracking-[0.14em] text-white/45 mb-1">当前词书</p>
-        <p id="active-book-name" class="text-sm font-semibold text-white truncate">我的 GRE 词书</p>
-      </div>
-      <nav id="nav" class="flex-1 px-3 py-4 space-y-1 text-sm overflow-y-auto"></nav>
-      <div class="px-5 py-4 border-t border-white/10 text-xs text-white/75">
-        <p class="mb-1.5 tracking-wide">今日目标</p>
-        <div class="progress-track">
-          <div id="daily-progress-bar" class="progress-fill" style="width:0%"></div>
-        </div>
-        <p id="daily-progress-text" class="mt-1.5 text-white/55">尚未开始</p>
-      </div>
-    </aside>
-
+    <!-- 桌面占位，与 fixed 侧栏同宽，避免主栏被挡住 -->
+    <div id="sidebar-spacer" class="hidden md:block w-64 shrink-0" aria-hidden="true"></div>
     <div id="main-pane" class="flex-1 flex flex-col min-w-0">
       <header class="h-14 md:h-16 shrink-0 mx-2 mt-2 md:mx-4 md:mt-3 glass-panel-strong flex items-center justify-between gap-3 px-3 md:px-6 !rounded-2xl">
         <div class="flex items-center gap-2 min-w-0">
@@ -1660,9 +1678,15 @@ function renderRoute(){
   (mounts[route.key]||(()=>{}))(view);
 }
 
-document.getElementById('menu-btn')?.addEventListener('click', openDrawer);
-document.getElementById('drawer-close')?.addEventListener('click', closeDrawer);
-document.getElementById('sidebar-overlay')?.addEventListener('click', closeDrawer);
+document.getElementById('menu-btn')?.addEventListener('click', (e)=>{ e.stopPropagation(); openDrawer(); });
+document.getElementById('drawer-close')?.addEventListener('click', (e)=>{ e.stopPropagation(); closeDrawer(); });
+document.getElementById('sidebar-overlay')?.addEventListener('click', (e)=>{
+  if(e.target !== e.currentTarget) return;
+  closeDrawer();
+});
+// 侧栏内点击绝不冒泡到遮罩
+document.getElementById('sidebar')?.addEventListener('click', (e)=> e.stopPropagation());
+document.getElementById('sidebar')?.addEventListener('touchstart', (e)=> e.stopPropagation(), {passive:true});
 window.addEventListener('resize', ()=>{ if(window.innerWidth>=768) closeDrawer(); });
 
 window.addEventListener('hashchange', renderRoute);
