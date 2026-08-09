@@ -1396,12 +1396,12 @@ function formatSyncTime(ts){
 
 // ---------- Views ----------
 const routes = [
-  {key:'dashboard', label:'首页 Dashboard', subtitle:'喷泉工坊 · 今日进度总览', icon:'🏛️'},
-  {key:'vocab', label:'单词记忆', subtitle:'翻转卡片 · 攻克核心词汇', icon:'📚'},
-  {key:'mistakes', label:'错词本', subtitle:'按天归类 · 再测试自检', icon:'📝'},
-  {key:'practice', label:'真题演练', subtitle:'阅读语境联动 · 哪里不会点哪里', icon:'🎯'},
-  {key:'sentence', label:'长难句', subtitle:'专属真题语境本', icon:'🧩'},
-  {key:'settings', label:'设置', subtitle:'云同步 · 词书 · 导入导出', icon:'⚙️'},
+  {key:'dashboard', label:'首页 Dashboard', subtitle:'喷泉工坊 · 今日进度总览'},
+  {key:'vocab', label:'单词记忆', subtitle:'翻转卡片 · 攻克核心词汇'},
+  {key:'mistakes', label:'错词本', subtitle:'按天归类 · 再测试自检'},
+  {key:'practice', label:'真题演练', subtitle:'阅读语境联动 · 哪里不会点哪里'},
+  {key:'sentence', label:'长难句', subtitle:'专属真题语境本'},
+  {key:'settings', label:'设置', subtitle:'云同步 · 词书 · 导入导出'},
 ];
 
 function renderDashboard(){
@@ -1526,7 +1526,7 @@ function paintVocabCard(root){
         <div class="absolute inset-0 rounded-3xl border ${face.border} shadow-sm px-8 py-7 overflow-y-auto" style="background:${face.bg};backface-visibility:hidden;transform:rotateY(180deg)">
           <div class="flex items-center gap-2"><span class="text-2xl font-bold">${escapeHtml(w.word)}${escapeHtml(failSuffix(w))}</span><button data-speak class="text-lg">🔊</button></div>
           <p class="text-lg mt-3 font-medium">${escapeHtml(w.definition||'')}</p>
-          ${w.contextSentence?`<div class="mt-4 bg-slate-100 border-l-4 border-slate-400 rounded-r-xl px-4 py-3"><p class="text-xs font-semibold text-slate-600 mb-1">🎯 你的真题重灾区</p><p class="text-sm italic text-slate-700">「${highlightWordHtml(w.contextSentence,w.word)}」</p></div>`:''}
+          ${w.contextSentence?`<div class="mt-4 bg-slate-100 border-l-4 border-slate-400 rounded-r-xl px-4 py-3"><p class="text-xs font-semibold text-slate-600 mb-1">你的真题重灾区</p><p class="text-sm italic text-slate-700">「${highlightWordHtml(w.contextSentence,w.word)}」</p></div>`:''}
         </div>
       </div>
     </div>
@@ -1646,7 +1646,7 @@ function renderPractice(){
         </div>
       </div>
       <div class="mt-4 pt-4 border-t border-slate-100">
-        <div class="flex justify-between mb-2"><h3 class="text-sm font-semibold">📜 历史演练记录</h3><span id="ph-count" class="text-xs text-slate-400">${hist.length} 条</span></div>
+        <div class="flex justify-between mb-2"><h3 class="text-sm font-semibold">历史演练记录</h3><span id="ph-count" class="text-xs text-slate-400">${hist.length} 条</span></div>
         <div id="ph-list" class="practice-history-scroll flex gap-3 overflow-x-auto pb-1">${renderHist(hist)}</div>
       </div>
     </div>
@@ -1658,7 +1658,7 @@ function renderPractice(){
           <div class="flex flex-wrap gap-2">
             <button id="p-parse" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">解析文章</button>
             <button id="p-clear" class="border text-sm px-3 py-2 rounded-lg text-slate-500">清空</button>
-            <button id="p-save" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">💾 保存当前演练</button>
+            <button id="p-save" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">保存当前演练</button>
             <span id="p-msg" class="text-xs text-slate-400"></span>
           </div>
         </div>
@@ -1730,7 +1730,7 @@ function mountPractice(root){
     tip.querySelector('.tip-add').onclick=e=>{
       e.stopPropagation();
       const r=markAsSprintMistake(entry.id, sentence);
-      tip.querySelector('.tip-fb').textContent=r.ok?`✅ ${r.message}`:`❌ ${r.message}`;
+      tip.querySelector('.tip-fb').textContent=r.message;
       if(r.ok) document.querySelectorAll(`.gre-hit[data-id="${entry.id}"]`).forEach(n=>{n.className='gre-hit gre-hit-mistake';});
       window.dispatchEvent(new Event('gre:progress'));
     };
@@ -1739,7 +1739,7 @@ function mountPractice(root){
   function refreshHist(){ const h=getPracticeHistory(); list.innerHTML=renderHist(h); count.textContent=`${h.length} 条`; }
   root.querySelector('#p-parse').onclick=parse;
   root.querySelector('#p-clear').onclick=()=>{ hideTip(); input.value=''; notes.value=''; lastArticle=''; article.innerHTML='<p class="text-slate-300 text-sm italic">解析后显示文章与高亮词</p>'; msg.textContent=''; };
-  root.querySelector('#p-save').onclick=()=>{ const r=savePractice(input.value, notes.value); alert(r.ok?`✅ ${r.message}`:r.message); if(r.ok) refreshHist(); };
+  root.querySelector('#p-save').onclick=()=>{ const r=savePractice(input.value, notes.value); alert(r.message); if(r.ok) refreshHist(); };
   list.onclick=e=>{
     const btn=e.target.closest('[data-act]'); if(!btn) return;
     const card=btn.closest('[data-id]'); const id=card.dataset.id;
@@ -1756,7 +1756,6 @@ function mountPractice(root){
 function renderSentence(){
   const items=activeBook().words.filter(w=>String(w.contextSentence||'').trim());
   if(!items.length) return `<div class="max-w-3xl mx-auto bg-white rounded-2xl border border-dashed p-16 text-center view-fade">
-    <p class="text-4xl mb-3">🧩</p>
     <p class="text-slate-700 font-medium">暂无数据，请前往【真题演练】区做题并捕获生词</p>
     <a href="#/practice" class="inline-block mt-6 bg-brand-600 text-white text-sm font-semibold px-5 py-2.5 rounded-lg">打开真题演练</a>
   </div>`;
@@ -1769,7 +1768,7 @@ function renderSentence(){
         <button data-speak="${escapeAttr(w.word)}" class="text-lg">🔊</button></div>
         <p class="text-sm text-slate-600 mt-1">${escapeHtml(w.definition||'')}</p>
         <div class="mt-4 bg-slate-50 border-l-4 border-brand-500 rounded-r-xl px-4 py-3">
-          <p class="text-xs font-semibold text-slate-500 mb-1">🎯 真题语境原句</p>
+          <p class="text-xs font-semibold text-slate-500 mb-1">真题语境原句</p>
           <p class="text-sm">「${highlightWordHtml(w.contextSentence,w.word)}」</p>
         </div>
       </article>`).join('')}</div></div>`;
@@ -1892,12 +1891,12 @@ function renderSettings(){
 
   return `<div class="max-w-3xl mx-auto space-y-4 view-fade">
     <p class="text-xs text-stone px-1">设置已分类：云同步 · 词书 · 计划 · 导入 · 导出 · 清空</p>
-    ${settingsSection('☁️ 一、云同步', '同一 GitHub 账号跨设备自动对齐。打开页面会先拉取云端，避免空库覆盖。', syncBody)}
-    ${settingsSection('📚 二、词书管理', '多本词书互不影响：单词、天数、错词本、真题历史各自独立。', bookBody)}
-    ${settingsSection('📅 三、计划进度', '针对当前词书推进 / 回退计划天。', planBody)}
-    ${settingsSection('📥 四、按天导入', '把每日词表导入到当前词书的指定天。', importBody)}
-    ${settingsSection('📤 五、导出 Word', '按背诵顺序导出当前词书选中天数。', exportBody)}
-    ${settingsSection('🧹 六、清空', '危险操作，请确认后再点。', clearBody)}
+    ${settingsSection('一、云同步', '同一 GitHub 账号跨设备自动对齐。打开页面会先拉取云端，避免空库覆盖。', syncBody)}
+    ${settingsSection('二、词书管理', '多本词书互不影响：单词、天数、错词本、真题历史各自独立。', bookBody)}
+    ${settingsSection('三、计划进度', '针对当前词书推进 / 回退计划天。', planBody)}
+    ${settingsSection('四、按天导入', '把每日词表导入到当前词书的指定天。', importBody)}
+    ${settingsSection('五、导出 Word', '按背诵顺序导出当前词书选中天数。', exportBody)}
+    ${settingsSection('六、清空', '危险操作，请确认后再点。', clearBody)}
   </div>`;
 }
 
@@ -1936,11 +1935,11 @@ function mountSettings(root){
     setMsg('正在登录并拉取云端…', true);
     try{
       const r = await githubLogin(token, { remember, passphrase, autoSync:true });
-      setMsg(`✅ @${r.user.login} · ${r.pull.message} · 本地 ${countWordsInState(state)} 词`, true);
+      setMsg(`@${r.user.login} · ${r.pull.message} · 本地 ${countWordsInState(state)} 词`, true);
       renderChrome();
       setTimeout(()=>renderRoute(), 400);
     }catch(e){
-      setMsg('❌ '+(e.message||e), false);
+      setMsg(String(e.message||e), false);
       cloud.token=null; cloud.unlocked=false;
     }
   });
@@ -1956,13 +1955,13 @@ function mountSettings(root){
       setMsg(r.message, true);
       renderChrome();
       renderRoute();
-    }catch(e){ setMsg('❌ '+(e.message||e), false); }
+    }catch(e){ setMsg(String(e.message||e), false); }
   });
   root.querySelector('#s-push')?.addEventListener('click', async ()=>{
     try{
       const r = await pushToGist({ force: false });
       setMsg(r.message, r.ok);
-    }catch(e){ setMsg('❌ '+(e.message||e), false); }
+    }catch(e){ setMsg(String(e.message||e), false); }
   });
 
   root.querySelector('#s-book-select')?.addEventListener('change', (e)=>{
@@ -2011,7 +2010,7 @@ function mountSettings(root){
     const day=root.querySelector('#s-target-day').value;
     const r=appendWords(lines, { targetDay: day });
     root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词到第 ${r.targetDay} 天；当前词书共 ${r.total} 词。</span>`+
-      (r.skipped?`<div class="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠️ 拦截 ${r.skipped} 个重复：${r.duplicateWords.map(escapeHtml).join(', ')}</div>`:'');
+      (r.skipped?`<div class="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">拦截 ${r.skipped} 个重复：${r.duplicateWords.map(escapeHtml).join(', ')}</div>`:'');
     renderChrome();
     setTimeout(()=>renderRoute(), 300);
   });
@@ -2054,7 +2053,7 @@ function closeDrawer(){ document.body.classList.remove('drawer-open'); }
 
 function renderNav(active){
   document.getElementById('nav').innerHTML = routes.map(r=>`
-    <a href="#/${r.key}" class="nav-item ${r.key===active?'active':''}"><span>${r.icon}</span><span>${r.label}</span></a>`).join('');
+    <a href="#/${r.key}" class="nav-item ${r.key===active?'active':''}">${r.label}</a>`).join('');
   document.querySelectorAll('#nav .nav-item').forEach(a=>{
     a.addEventListener('click', ()=> closeDrawer());
   });
