@@ -95,7 +95,10 @@
             <p id="page-subtitle" class="text-xs text-slate-400 truncate"></p>
           </div>
         </div>
-        <span id="today-date" class="text-sm text-slate-500 shrink-0"></span>
+        <div class="flex items-center gap-2 shrink-0">
+          <span id="sync-badge" class="hidden sm:inline text-[11px] text-slate-500 max-w-[10rem] md:max-w-xs truncate">未登录</span>
+          <span id="today-date" class="hidden md:inline text-sm text-slate-500"></span>
+        </div>
       </header>
       <main id="view" class="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8"></main>
     </div>
@@ -103,6 +106,23 @@
 
 <script type="module">
 const STORAGE_KEY = 'gre-single-v1';
+const AUTH_KEY = 'gre-single-auth-v1';
+const GIST_MARKER = 'GRE-PREP-SYNC-v1';
+const GIST_FILENAME = 'gre-prep-data.json';
+const GH_API = 'https://api.github.com';
+
+/** 云同步会话：Token 只留在内存；落盘时用保护密码 AES 加密 */
+let cloud = {
+  token: null,
+  login: null,
+  gistId: null,
+  lastSyncAt: null,
+  autoSync: true,
+  unlocked: false,
+};
+let syncTimer = null;
+let syncing = false;
+
 const WORD_STATUS = { NEW:'new', LEARNING:'learning', MASTERED:'mastered' };
 const PLAN = { TOTAL_DAYS:16, NEW_PER_DAY:200, MISTAKE_PER_DAY:300, REVIEW_LAG:2 };
 
@@ -179,7 +199,10 @@ function loadState(){
 }
 
 let state = loadState();
-function persist(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function persist(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  scheduleCloudPush();
+}
 function activeBook(){
   let b = state.wordbooks.find(x=>x.id===state.activeBookId);
   if(!b){ b=state.wordbooks[0]; state.activeBookId=b.id; }
@@ -378,6 +401,340 @@ function appendWords(lines){
   return {added, skipped, duplicateWords:dups, total:book.words.length};
 }
 
+
+// ---------- GitHub Gist 云同步 ----------
+function bytesToB64(bytes){
+  let s=''; const a=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
+  for(let i=0;i<a.length;i++) s+=String.fromCharCode(a[i]);
+  return btoa(s);
+}
+function b64ToBytes(b64){
+  const s=atob(b64); const out=new Uint8Array(s.length);
+  for(let i=0;i<s.length;i++) out[i]=s.charCodeAt(i);
+  return out;
+}
+async function deriveKey(passphrase, salt){
+  const enc=new TextEncoder();
+  const base=await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2', salt, iterations:120000, hash:'SHA-256'},
+    base,
+    {name:'AES-GCM', length:256},
+    false,
+    ['encrypt','decrypt']
+  );
+}
+function assertCrypto(){
+  if(!globalThis.crypto?.subtle){
+    throw new Error('当前环境不支持安全加密。请用 GitHub Pages 的 https 链接打开本页（不要用本地文件直接打开）。');
+  }
+}
+async function encryptToken(token, passphrase){
+  assertCrypto();
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const key=await deriveKey(passphrase, salt);
+  const cipher=await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, new TextEncoder().encode(token));
+  return { v:1, salt:bytesToB64(salt), iv:bytesToB64(iv), cipher:bytesToB64(cipher) };
+}
+async function decryptToken(blob, passphrase){
+  assertCrypto();
+  const key=await deriveKey(passphrase, b64ToBytes(blob.salt));
+  const plain=await crypto.subtle.decrypt(
+    {name:'AES-GCM', iv:b64ToBytes(blob.iv)},
+    key,
+    b64ToBytes(blob.cipher)
+  );
+  return new TextDecoder().decode(plain);
+}
+
+function loadAuthMeta(){
+  try{ return JSON.parse(localStorage.getItem(AUTH_KEY)||'null'); }catch{ return null; }
+}
+function saveAuthMeta(meta){
+  localStorage.setItem(AUTH_KEY, JSON.stringify(meta));
+}
+function clearAuthMeta(){
+  localStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_KEY+':session');
+}
+
+function loadSessionToken(){
+  try{ return sessionStorage.getItem(AUTH_KEY+':session')||null; }catch{ return null; }
+}
+function saveSessionToken(token){
+  sessionStorage.setItem(AUTH_KEY+':session', token);
+}
+
+async function ghFetch(path, opts={}){
+  if(!cloud.token) throw new Error('尚未登录 GitHub');
+  const res = await fetch(GH_API+path, {
+    ...opts,
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': `Bearer ${cloud.token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(opts.body ? {'Content-Type':'application/json'} : {}),
+      ...(opts.headers||{}),
+    },
+  });
+  const textBody = await res.text();
+  let data=null;
+  try{ data = textBody ? JSON.parse(textBody) : null; }catch{ data={ raw:textBody }; }
+  if(!res.ok){
+    const msg = data?.message || res.statusText || ('HTTP '+res.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function buildCloudPayload(){
+  return {
+    app: GIST_MARKER,
+    updatedAt: Date.now(),
+    state,
+  };
+}
+
+async function findOrCreateGist(){
+  if(cloud.gistId){
+    try{
+      const g = await ghFetch('/gists/'+cloud.gistId);
+      if(g?.id) return g;
+    }catch{ cloud.gistId=null; }
+  }
+  // 扫描最近 gists，找标记文件
+  const list = await ghFetch('/gists?per_page=50');
+  const found = (list||[]).find(g =>
+    (g.description||'').includes(GIST_MARKER) ||
+    (g.files && g.files[GIST_FILENAME])
+  );
+  if(found){
+    cloud.gistId = found.id;
+    return await ghFetch('/gists/'+found.id);
+  }
+  // 新建私有 Gist
+  const created = await ghFetch('/gists', {
+    method:'POST',
+    body: JSON.stringify({
+      description: `${GIST_MARKER} · GRE备考进度同步（请勿公开）`,
+      public: false,
+      files: {
+        [GIST_FILENAME]: {
+          content: JSON.stringify(buildCloudPayload(), null, 2),
+        },
+      },
+    }),
+  });
+  cloud.gistId = created.id;
+  return created;
+}
+
+function applyRemoteState(payload){
+  if(!payload?.state?.wordbooks?.length) return false;
+  state = payload.state;
+  state.wordbooks.forEach(b=>{
+    if(!Array.isArray(b.practiceHistory)) b.practiceHistory=[];
+    if(!Array.isArray(b.words)) b.words=[];
+  });
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  return true;
+}
+
+async function pullFromGist(){
+  const gist = await findOrCreateGist();
+  const file = gist.files?.[GIST_FILENAME];
+  if(!file) return { ok:true, message:'云端尚无数据，将在下次保存时上传', pulled:false };
+  let content = file.content;
+  if(!content && file.raw_url){
+    const r = await fetch(file.raw_url, {
+      headers:{ Authorization:`Bearer ${cloud.token}`, Accept:'application/vnd.github.raw' },
+    });
+    content = await r.text();
+  }
+  const payload = JSON.parse(content);
+  const remoteAt = Number(payload.updatedAt)||0;
+  const localRaw = localStorage.getItem(STORAGE_KEY);
+  let localAt = 0;
+  try{
+    // 用 meta 或启发式：没有本地时间戳时，若本地几乎是默认则拉云端
+    const meta = loadAuthMeta();
+    localAt = Number(meta?.localUpdatedAt)||0;
+  }catch{}
+  // 若云端更新，覆盖本地
+  if(remoteAt >= localAt){
+    applyRemoteState(payload);
+    cloud.lastSyncAt = Date.now();
+    persistAuthSide();
+    return { ok:true, message:'已从云端拉取最新进度', pulled:true, remoteAt };
+  }
+  cloud.lastSyncAt = Date.now();
+  persistAuthSide();
+  return { ok:true, message:'本地更新，保留本地数据（稍后会推送）', pulled:false, remoteAt };
+}
+
+async function pushToGist(){
+  if(!cloud.token) return { ok:false, message:'未登录' };
+  const gist = await findOrCreateGist();
+  const payload = buildCloudPayload();
+  await ghFetch('/gists/'+gist.id, {
+    method:'PATCH',
+    body: JSON.stringify({
+      files: {
+        [GIST_FILENAME]: { content: JSON.stringify(payload, null, 2) },
+      },
+    }),
+  });
+  cloud.lastSyncAt = Date.now();
+  const meta = loadAuthMeta()||{};
+  meta.localUpdatedAt = payload.updatedAt;
+  meta.lastSyncAt = cloud.lastSyncAt;
+  meta.gistId = cloud.gistId;
+  meta.login = cloud.login;
+  saveAuthMeta({ ...meta, localUpdatedAt: payload.updatedAt, lastSyncAt: cloud.lastSyncAt, gistId: cloud.gistId, login: cloud.login });
+  return { ok:true, message:'已同步到云端 Gist', at: payload.updatedAt };
+}
+
+function scheduleCloudPush(){
+  const meta = loadAuthMeta()||{};
+  meta.localUpdatedAt = Date.now();
+  if(cloud.login) meta.login = cloud.login;
+  if(cloud.gistId) meta.gistId = cloud.gistId;
+  saveAuthMeta({ ...(loadAuthMeta()||{}), ...meta });
+  if(!cloud.token || !cloud.autoSync || syncing) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async ()=>{
+    try{
+      syncing = true;
+      await pushToGist();
+      updateSyncBadge('已自动同步');
+    }catch(e){
+      updateSyncBadge('同步失败: '+(e.message||e));
+      console.warn('cloud push failed', e);
+    }finally{ syncing=false; }
+  }, 1500);
+}
+
+function persistAuthSide(){
+  const prev = loadAuthMeta()||{};
+  saveAuthMeta({
+    ...prev,
+    login: cloud.login,
+    gistId: cloud.gistId,
+    lastSyncAt: cloud.lastSyncAt,
+    autoSync: cloud.autoSync,
+  });
+}
+
+async function githubLogin(token, opts={}){
+  const clean = String(token||'').trim();
+  if(!clean) throw new Error('请粘贴 GitHub Token');
+  if(!clean.startsWith('ghp_') && !clean.startsWith('github_pat_')){
+    // 仍允许，但提示
+  }
+  cloud.token = clean;
+  const user = await ghFetch('/user');
+  cloud.login = user.login;
+  cloud.gistId = opts.gistId || loadAuthMeta()?.gistId || null;
+  cloud.autoSync = opts.autoSync !== false;
+  cloud.unlocked = true;
+
+  // Token 保存策略
+  if(opts.remember){
+    const pass = String(opts.passphrase||'').trim();
+    if(pass.length < 4) throw new Error('记住登录时，保护密码至少 4 位');
+    const enc = await encryptToken(clean, pass);
+    saveAuthMeta({
+      mode: 'encrypted',
+      enc,
+      login: cloud.login,
+      gistId: cloud.gistId,
+      lastSyncAt: cloud.lastSyncAt,
+      autoSync: cloud.autoSync,
+      localUpdatedAt: loadAuthMeta()?.localUpdatedAt || Date.now(),
+    });
+    sessionStorage.removeItem(AUTH_KEY+':session');
+  }else{
+    saveSessionToken(clean);
+    saveAuthMeta({
+      mode: 'session',
+      login: cloud.login,
+      gistId: cloud.gistId,
+      lastSyncAt: cloud.lastSyncAt,
+      autoSync: cloud.autoSync,
+      localUpdatedAt: loadAuthMeta()?.localUpdatedAt || Date.now(),
+    });
+  }
+
+  const pull = await pullFromGist();
+  // 若没拉到更新，把本地推上去，保证两端有底
+  if(!pull.pulled) await pushToGist();
+  updateSyncBadge(`已登录 @${cloud.login}`);
+  window.dispatchEvent(new Event('gre:progress'));
+  return { user, pull };
+}
+
+function githubLogout(){
+  cloud = { token:null, login:null, gistId: loadAuthMeta()?.gistId||null, lastSyncAt:null, autoSync:true, unlocked:false };
+  clearAuthMeta();
+  updateSyncBadge('未登录');
+}
+
+async function tryRestoreSession(){
+  const meta = loadAuthMeta();
+  if(!meta) { updateSyncBadge('未登录'); return; }
+  cloud.login = meta.login||null;
+  cloud.gistId = meta.gistId||null;
+  cloud.lastSyncAt = meta.lastSyncAt||null;
+  cloud.autoSync = meta.autoSync !== false;
+  if(meta.mode==='session'){
+    const t = loadSessionToken();
+    if(t){
+      cloud.token = t;
+      cloud.unlocked = true;
+      try{
+        await pullFromGist();
+        updateSyncBadge(`已登录 @${cloud.login}`);
+        renderChrome();
+      }catch(e){
+        updateSyncBadge('会话失效，请重新登录');
+        cloud.token=null; cloud.unlocked=false;
+      }
+    }else{
+      updateSyncBadge(meta.login ? `已记住 @${meta.login}（会话结束，请重新粘贴 Token）` : '未登录');
+    }
+  }else if(meta.mode==='encrypted'){
+    updateSyncBadge(`@${meta.login||'?'} 待解锁`);
+  }else{
+    updateSyncBadge(meta.login?`@${meta.login}`:'未登录');
+  }
+}
+
+async function unlockEncrypted(passphrase){
+  const meta = loadAuthMeta();
+  if(!meta?.enc) throw new Error('没有可解锁的登录信息');
+  const token = await decryptToken(meta.enc, passphrase);
+  cloud.token = token;
+  cloud.login = meta.login;
+  cloud.gistId = meta.gistId;
+  cloud.autoSync = meta.autoSync !== false;
+  cloud.unlocked = true;
+  await pullFromGist();
+  updateSyncBadge(`已解锁 @${cloud.login}`);
+  window.dispatchEvent(new Event('gre:progress'));
+}
+
+function updateSyncBadge(text){
+  const el = document.getElementById('sync-badge');
+  if(el) el.textContent = text;
+}
+
+function formatSyncTime(ts){
+  if(!ts) return '尚未同步';
+  return new Date(ts).toLocaleString('zh-CN');
+}
+
+
 // ---------- Views ----------
 const routes = [
   {key:'dashboard', label:'首页 Dashboard', subtitle:'总览你的备考进度与今日计划', icon:'🏠'},
@@ -406,7 +763,7 @@ function renderDashboard(){
         <a href="#/practice" class="border border-slate-200 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-50">真题演练</a>
       </div>
     </div>
-    <p class="text-xs text-slate-400">本文件可直接上传到 GitHub Pages：把本 HTML 放进仓库根目录并命名为 <code class="bg-slate-100 px-1 rounded">index.html</code> 即可发布。</p>
+    <p class="text-xs text-slate-400">跨设备同步：打开「设置」用 GitHub Token 登录后，进度会写入你的私有 Gist，手机与电脑自动对齐。</p>
   </div>`;
 }
 function statBox(label,n,cls=''){ return `<div class="bg-slate-50 rounded-xl p-4 border border-slate-100"><p class="text-xs text-slate-400">${label}</p><p class="text-2xl font-bold mt-1 ${cls}">${n}</p></div>`; }
@@ -641,7 +998,57 @@ function mountSentence(root){ root.querySelectorAll('[data-speak]').forEach(b=>b
 
 function renderSettings(){
   const task=getTodayTask();
+  const meta=loadAuthMeta();
+  const logged = !!(cloud.token && cloud.unlocked);
+  const needUnlock = !!(meta?.mode==='encrypted' && !cloud.unlocked);
   return `<div class="max-w-3xl mx-auto space-y-4 view-fade">
+    <div class="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200">
+      <h2 class="text-lg font-semibold">☁️ GitHub 云同步（免费）</h2>
+      <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+        用你的 GitHub 账号把进度存到<strong>私有 Gist</strong>。手机与电脑打开本页并登录同一账号即可自动同步。
+      </p>
+      <div class="mt-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-600 space-y-1">
+        <p>状态：<span class="font-semibold text-brand-700">${escapeHtml(logged ? ('已登录 @'+cloud.login) : (needUnlock ? ('待解锁 @'+(meta.login||'')) : (meta?.login ? ('曾登录 @'+meta.login) : '未登录')))}</span></p>
+        <p>上次同步：${escapeHtml(formatSyncTime(cloud.lastSyncAt || meta?.lastSyncAt))}</p>
+        <p>Gist：${cloud.gistId || meta?.gistId ? ('…'+String(cloud.gistId||meta.gistId).slice(-8)) : '尚未创建'}</p>
+      </div>
+
+      ${needUnlock ? `
+      <div class="mt-4 space-y-2 border-t border-slate-100 pt-4">
+        <p class="text-sm font-medium text-slate-800">输入保护密码解锁 Token</p>
+        <input id="s-unlock-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码" />
+        <button id="s-unlock" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">解锁并同步</button>
+        <button id="s-forget" class="ml-2 text-sm text-slate-500 underline">清除本地登录</button>
+        <p id="s-unlock-msg" class="text-xs text-slate-400"></p>
+      </div>` : `
+      <div class="mt-4 space-y-3 border-t border-slate-100 pt-4 ${logged?'opacity-60':''}">
+        <p class="text-sm font-medium text-slate-800">1. 创建 Token（仅勾选 gist 权限）</p>
+        <ol class="text-xs text-slate-500 list-decimal pl-4 space-y-1">
+          <li>打开 <a class="text-brand-600 underline" target="_blank" rel="noopener" href="https://github.com/settings/tokens?type=beta">GitHub → Settings → Fine-grained tokens</a></li>
+          <li>权限里只开 <code class="bg-slate-100 px-1 rounded">Gists: Read and write</code>（不要给 repo 权限）</li>
+          <li>复制 Token，粘贴到下方（形如 github_pat_… 或 ghp_…）</li>
+        </ol>
+        <input id="s-token" type="password" autocomplete="off" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="粘贴 GitHub Token" ${logged?'disabled':''} />
+        <label class="flex items-start gap-2 text-xs text-slate-600">
+          <input id="s-remember" type="checkbox" class="mt-0.5" ${logged?'disabled':''} />
+          <span>记住登录：用「保护密码」加密 Token 后存本机（推荐）。不勾选则仅本次浏览器会话有效。</span>
+        </label>
+        <input id="s-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码（勾选记住登录时必填，≥4 位）" ${logged?'disabled':''} />
+        <div class="flex flex-wrap gap-2">
+          <button id="s-login" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg" ${logged?'disabled':''}>登录并同步</button>
+          ${logged?`<button id="s-logout" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">退出登录</button>
+          <button id="s-pull" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">立即拉取</button>
+          <button id="s-push" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">立即推送</button>`:''}
+        </div>
+        <p id="s-sync-msg" class="text-xs text-slate-400"></p>
+      </div>`}
+
+      <div class="mt-4 text-[11px] text-slate-400 leading-relaxed bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+        <p class="font-semibold text-amber-800 mb-1">Token 如何妥善保存？</p>
+        <p>纯前端页面<strong>无法</strong>做到银行级保密（本机 DevTools 仍可能看到解密后的 Token）。我们采用的最佳实践是：① 只用 gist 权限的细粒度 Token；② 用你设的保护密码 AES-GCM 加密后写入 localStorage；③ 数据放在私有 Gist；④ 公用电脑请勿勾选「记住登录」，用完点退出。若 Token 泄露，立刻在 GitHub 撤销即可。</p>
+      </div>
+    </div>
+
     <div class="bg-white rounded-2xl p-6 border">
       <h2 class="text-lg font-semibold">计划与词库</h2>
       <p class="text-sm text-slate-400 mt-1">当前第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 词库 ${getStats().total} 词</p>
@@ -662,22 +1069,70 @@ function renderSettings(){
   </div>`;
 }
 function mountSettings(root){
-  root.querySelector('#s-advance').onclick=()=>{
+  const msg = root.querySelector('#s-sync-msg');
+  const setMsg = (t, ok)=>{ if(!msg) return; msg.className='text-xs '+(ok?'text-brand-600':'text-accent'); msg.textContent=t; };
+
+  root.querySelector('#s-unlock')?.addEventListener('click', async ()=>{
+    const m = root.querySelector('#s-unlock-msg');
+    try{
+      await unlockEncrypted(root.querySelector('#s-unlock-pass').value);
+      m.className='text-xs text-brand-600'; m.textContent='解锁成功，已同步云端。';
+      renderChrome();
+      setTimeout(()=>{ location.hash='#/settings'; renderRoute(); }, 400);
+    }catch(e){
+      m.className='text-xs text-accent'; m.textContent='解锁失败：'+(e.message||e)+'（密码错误？）';
+    }
+  });
+  root.querySelector('#s-forget')?.addEventListener('click', ()=>{
+    if(!confirm('清除本机保存的加密 Token？云端 Gist 数据不会删除。')) return;
+    githubLogout();
+    renderRoute();
+  });
+
+  root.querySelector('#s-login')?.addEventListener('click', async ()=>{
+    const token = root.querySelector('#s-token').value;
+    const remember = root.querySelector('#s-remember').checked;
+    const passphrase = root.querySelector('#s-pass').value;
+    setMsg('正在登录 GitHub…', true);
+    try{
+      const r = await githubLogin(token, { remember, passphrase, autoSync:true });
+      setMsg(`✅ 登录成功 @${r.user.login}。${r.pull.message}`, true);
+      renderChrome();
+      setTimeout(()=>renderRoute(), 500);
+    }catch(e){
+      setMsg('❌ '+(e.message||e), false);
+      cloud.token=null; cloud.unlocked=false;
+    }
+  });
+  root.querySelector('#s-logout')?.addEventListener('click', ()=>{
+    githubLogout();
+    renderRoute();
+  });
+  root.querySelector('#s-pull')?.addEventListener('click', async ()=>{
+    try{ const r=await pullFromGist(); setMsg(r.message, true); renderChrome(); renderRoute(); }
+    catch(e){ setMsg('❌ '+(e.message||e), false); }
+  });
+  root.querySelector('#s-push')?.addEventListener('click', async ()=>{
+    try{ const r=await pushToGist(); setMsg(r.message, true); }
+    catch(e){ setMsg('❌ '+(e.message||e), false); }
+  });
+
+  root.querySelector('#s-advance')?.addEventListener('click', ()=>{
     const ok=advanceDay();
     root.querySelector('#s-adv-msg').textContent=ok?`已推进到第 ${activeBook().currentPlanDay} 天`:'已是最后一天';
     renderChrome();
-  };
-  root.querySelector('#s-import-btn').onclick=()=>{
+  });
+  root.querySelector('#s-import-btn')?.addEventListener('click', ()=>{
     const lines=root.querySelector('#s-import').value.split(/\n/).map(l=>l.trim()).filter(Boolean);
     const r=appendWords(lines);
     root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词，当前共 ${r.total} 词。</span>`+
       (r.skipped?`<div class="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠️ 拦截 ${r.skipped} 个重复：${r.duplicateWords.map(escapeHtml).join(', ')}</div>`:'');
     renderChrome();
-  };
-  root.querySelector('#s-reset').onclick=()=>{
-    if(!confirm('确定重置？本地进度将清空。')) return;
+  });
+  root.querySelector('#s-reset')?.addEventListener('click', ()=>{
+    if(!confirm('确定重置？本地进度将清空（云端需手动再推送才会覆盖）。')) return;
     const book=defaultBook(); state={activeBookId:book.id, wordbooks:[book]}; persist(); location.reload();
-  };
+  });
 }
 
 const mounts = { vocab:mountVocab, mistakes:mountMistakes, practice:mountPractice, sentence:mountSentence, settings:mountSettings };
@@ -729,6 +1184,7 @@ window.addEventListener('gre:progress', renderChrome);
 if(!location.hash) location.hash='#/dashboard';
 renderRoute();
 renderChrome();
+tryRestoreSession().then(()=>{ renderChrome(); }).catch(()=>{});
 </script>
 </body>
 </html>
