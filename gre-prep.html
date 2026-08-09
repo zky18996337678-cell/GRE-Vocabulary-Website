@@ -371,6 +371,8 @@ let cloud = {
 };
 let syncTimer = null;
 let syncing = false;
+/** 背词会话模式：daily 日常 / retest 错词再测试 */
+let vocabMode = 'daily';
 
 const WORD_STATUS = { NEW:'new', LEARNING:'learning', MASTERED:'mastered' };
 const PLAN = { TOTAL_DAYS:16, NEW_PER_DAY:200, MISTAKE_PER_DAY:300, REVIEW_LAG:2 };
@@ -391,10 +393,55 @@ function wrapWord(w){
     importOrder: w.importOrder ?? null,
     mistakeLevel: w.mistakeLevel || 0,
     unknownCount: w.unknownCount || 0,
+    // 在哪些计划天点过「不认识」
+    failDays: Array.isArray(w.failDays) ? w.failDays.slice() : [],
     reviewCount: w.reviewCount || 0,
     lastReviewTime: w.lastReviewTime || null,
     contextSentence: w.contextSentence || '',
   };
+}
+
+/** 错词展示后缀：第 1 次不会不加；第 2 次起显示 (2)(3)… */
+function failSuffix(w){
+  const n = w.unknownCount || 0;
+  return n >= 2 ? `（${n}）` : '';
+}
+
+function isMistakeWord(w){
+  return (w.unknownCount || 0) > 0 || (w.mistakeLevel || 0) > 0;
+}
+
+/** 按失败天数归类错词（同一词可出现在多个天） */
+function getMistakesGroupedByDay(){
+  const groups = {};
+  for(const w of activeBook().words){
+    if(!isMistakeWord(w)) continue;
+    let days = Array.isArray(w.failDays) ? w.failDays.filter(d=>d>=1) : [];
+    if(!days.length){
+      // 兼容旧数据 / 真题捕获：归到 learnedDay 或 targetDay
+      const fallback = w.learnedDay || w.targetDay || activeBook().currentPlanDay;
+      days = [fallback];
+    }
+    for(const d of days){
+      if(!groups[d]) groups[d]=[];
+      if(!groups[d].some(x=>x.id===w.id)) groups[d].push(w);
+    }
+  }
+  Object.keys(groups).forEach(d=> groups[d].sort(byImportOrder));
+  return groups;
+}
+
+function getMistakeWordsForDays(days){
+  const set = new Set(days.map(Number));
+  const map = new Map();
+  for(const w of activeBook().words){
+    if(!isMistakeWord(w)) continue;
+    const fds = Array.isArray(w.failDays) && w.failDays.length
+      ? w.failDays
+      : [w.learnedDay || w.targetDay].filter(Boolean);
+    if(fds.some(d=>set.has(Number(d)))) map.set(w.id, w);
+  }
+  return [...map.values()].sort(byImportOrder);
 }
 
 function byImportOrder(a, b){
@@ -492,7 +539,7 @@ function getStats(){
     newCount: all.filter(w=>w.status===WORD_STATUS.NEW).length,
     learningCount: all.filter(w=>w.status===WORD_STATUS.LEARNING).length,
     masteredCount: all.filter(w=>w.status===WORD_STATUS.MASTERED).length,
-    mistakeCount: all.filter(w=>w.mistakeLevel>0).length,
+    mistakeCount: all.filter(w=>isMistakeWord(w)).length,
     contextCount: all.filter(w=>String(w.contextSentence||'').trim()).length,
   };
 }
@@ -519,7 +566,21 @@ function buildTodayQueue(){
   if(day>=3 && day<=9){
     review = all.filter(w=>w.learnedDay===day-PLAN.REVIEW_LAG).sort(byImportOrder);
   }
-  return [...newWords, ...review];
+  // 前一天不会的词，第二天再练一遍（保持导入顺序，不打乱）
+  let yesterdayFails=[];
+  if(day>=2){
+    yesterdayFails = all.filter(w=>
+      Array.isArray(w.failDays) && w.failDays.includes(day-1) && w.status !== WORD_STATUS.MASTERED
+    ).sort(byImportOrder);
+  }
+  const seen = new Set();
+  const merged = [];
+  for(const w of [...newWords, ...yesterdayFails, ...review]){
+    if(seen.has(w.id)) continue;
+    seen.add(w.id);
+    merged.push(w);
+  }
+  return merged;
 }
 
 function getTodayTask(){
@@ -587,6 +648,9 @@ function markAsSprintMistake(wordId, sentence){
   const w = book.words.find(x=>x.id===wordId);
   if(!w) return {ok:false,message:'未找到该单词'};
   w.mistakeLevel = 2;
+  if(!w.unknownCount) w.unknownCount = 1; // 首次捕获不加（1）
+  if(!Array.isArray(w.failDays)) w.failDays = [];
+  if(!w.failDays.includes(book.currentPlanDay)) w.failDays.push(book.currentPlanDay);
   if(w.status===WORD_STATUS.NEW) w.status=WORD_STATUS.LEARNING;
   if(sentence) w.contextSentence = sentence;
   persist();
@@ -638,11 +702,18 @@ function gradeWord(id, known){
     w.status = WORD_STATUS.LEARNING;
     w.mistakeLevel = Math.min(2, (w.mistakeLevel||0)+1);
     w.unknownCount = (w.unknownCount||0) + 1;
+    if(!Array.isArray(w.failDays)) w.failDays = [];
+    const day = book.currentPlanDay;
+    // 同一天多次点「不认识」只记一次天数，但 unknownCount 照常累加
+    if(!w.failDays.includes(day)) w.failDays.push(day);
   }
   if(w.learnedDay==null) w.learnedDay = book.currentPlanDay;
   w.reviewCount = (w.reviewCount||0)+1;
   w.lastReviewTime = Date.now();
-  book.progress.wordsLearnedToday = (book.progress.wordsLearnedToday||0)+1;
+  // 再测试模式不占用「今日目标」进度
+  if(vocabMode !== 'retest'){
+    book.progress.wordsLearnedToday = (book.progress.wordsLearnedToday||0)+1;
+  }
   persist();
   window.dispatchEvent(new Event('gre:progress'));
 }
@@ -1169,7 +1240,7 @@ function formatSyncTime(ts){
 const routes = [
   {key:'dashboard', label:'首页 Dashboard', subtitle:'喷泉工坊 · 今日进度总览', icon:'🏛️'},
   {key:'vocab', label:'单词记忆', subtitle:'翻转卡片 · 攻克核心词汇', icon:'📚'},
-  {key:'mistakes', label:'错词本', subtitle:'手抄错词与荧光笔重点', icon:'📝'},
+  {key:'mistakes', label:'错词本', subtitle:'按天归类 · 再测试自检', icon:'📝'},
   {key:'practice', label:'真题演练', subtitle:'阅读语境联动 · 哪里不会点哪里', icon:'🎯'},
   {key:'sentence', label:'长难句', subtitle:'专属真题语境本', icon:'🧩'},
   {key:'settings', label:'设置', subtitle:'导入词表与计划推进', icon:'⚙️'},
@@ -1182,8 +1253,8 @@ function renderDashboard(){
     <section class="glass-panel p-7 md:p-9 relative overflow-hidden">
       <div class="absolute -right-8 -top-10 w-40 h-40 rounded-full bg-water/20 blur-2xl pointer-events-none"></div>
       <p class="text-[11px] tracking-[0.2em] uppercase text-stone mb-2">Fountain Atelier</p>
-      <h2 class="display-title text-3xl md:text-4xl font-semibold text-ink leading-tight">静心一刻，把今天的词背完</h2>
-      <p class="text-sm text-stone mt-3 max-w-xl leading-relaxed">「${escapeHtml(task.bookName)}」· 第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal}。界面只负责安静陪你，进度与词序都按你自己的节奏。</p>
+      <h2 class="display-title text-3xl md:text-4xl font-semibold text-ink leading-tight">慢慢来，你已经在路上了</h2>
+      <p class="text-sm text-stone mt-3 max-w-xl leading-relaxed">「${escapeHtml(task.bookName)}」· 第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal}</p>
       <div class="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
         ${statBox('词库', s.total,'text-ink')}
         ${statBox('未学', s.newCount,'text-water')}
@@ -1196,8 +1267,25 @@ function renderDashboard(){
         <a href="#/settings" class="btn-spring btn-ghost">导入今日词表</a>
       </div>
     </section>
-    <p class="text-xs text-stone/80 px-1">灵感取自高级产品界面的克制气质：少装饰、强节奏、玻璃层次——让你看见界面仍想继续学，而不是被特效带走注意力。</p>
+    <p class="text-sm text-stone/90 px-1 leading-relaxed italic">${pickCalmMotto()}</p>
   </div>`;
+}
+
+const CALM_MOTTOS = [
+  '心如止水，事缓则圆。',
+  '今日事今日毕，不慌，也不急。',
+  '万物皆有裂痕，那是光照进来的地方。',
+  '你不必赶路，只需与自己并肩同行。',
+  '静而后能安，安而后能虑，虑而后能得。',
+  '慢慢变好，是生活给努力的人最好的礼物。',
+  '山高路远，步步皆景；心静则安，念念自明。',
+  '不必完美，认真过完这一小段就很好。',
+  '把焦虑放在门外，把耐心请上桌。',
+  '一念清净，处处莲花开。',
+];
+function pickCalmMotto(){
+  const i = Math.floor(Date.now() / 86400000) % CALM_MOTTOS.length; // 每天一句，安静不吵
+  return CALM_MOTTOS[i];
 }
 function statBox(label,n,cls=''){ return `<div class="stat-tile"><p class="text-xs text-stone tracking-wide">${label}</p><p class="display-title text-3xl font-semibold mt-1 ${cls}">${n}</p></div>`; }
 
@@ -1216,33 +1304,69 @@ function renderVocab(){
 function mountVocab(root){
   root.querySelector('#vocab-start')?.addEventListener('click',()=>startVocab(root));
 }
+function returnFromVocabSession(root){
+  detachVocabKey();
+  if(vocabMode==='retest'){
+    vocabMode='daily';
+    root.innerHTML = renderMistakes();
+    mountMistakes(root);
+  }else{
+    vocabMode='daily';
+    root.innerHTML = renderVocab();
+    mountVocab(root);
+  }
+}
+
 function startVocab(root){
+  vocabMode = 'daily';
   vocabQueue = buildTodayQueue();
   vocabIdx=0; vocabFlipped=false;
   if(!vocabQueue.length){
-    root.innerHTML=`<div class="max-w-2xl mx-auto bg-white rounded-2xl p-10 border border-dashed border-slate-300 text-center">
-      <p class="text-slate-700 font-medium">今日队列为空</p>
-      <p class="text-xs text-slate-400 mt-2">可在设置页推进天数，或去真题演练捕获错词</p>
+    root.innerHTML=`<div class="max-w-2xl mx-auto glass-panel p-10 border border-dashed text-center">
+      <p class="text-ink font-medium">今日队列为空</p>
+      <p class="text-xs text-stone mt-2">可在设置页推进天数，或去真题演练捕获错词</p>
       <button id="vocab-back" class="mt-4 text-sm text-brand-700">返回</button></div>`;
-    root.querySelector('#vocab-back').onclick=()=>{ root.innerHTML=renderVocab(); mountVocab(root); };
+    root.querySelector('#vocab-back').onclick=()=>returnFromVocabSession(root);
     return;
   }
   paintVocabCard(root);
 }
+
+function startMistakeRetest(root, days){
+  vocabMode = 'retest';
+  vocabQueue = getMistakeWordsForDays(days);
+  vocabIdx=0; vocabFlipped=false;
+  if(!vocabQueue.length){
+    alert('所选天数没有可再测试的错词。');
+    vocabMode='daily';
+    return;
+  }
+  paintVocabCard(root);
+}
+
 function paintVocabCard(root){
   const w=vocabQueue[vocabIdx]; vocabFlipped=false;
   const face = w.mistakeLevel>=2?{bg:'#fdf0f0',border:'border-red-200'}:w.mistakeLevel===1?{bg:'#fdf9ec',border:'border-amber-200'}:{bg:'#fff',border:'border-slate-200'};
+  const modeLabel = vocabMode==='retest' ? '错词再测试' : '单词记忆';
+  const doneTitle = vocabMode==='retest' ? '再测试完成 🌿' : '今日任务完成 🎉';
   root.innerHTML=`<div class="max-w-2xl mx-auto view-fade">
-    <div class="flex justify-between mb-4"><button id="vocab-exit" class="text-sm text-slate-400">← 退出</button><span class="text-sm text-slate-500">${vocabIdx+1}/${vocabQueue.length}</span></div>
+    <div class="flex justify-between mb-4 items-center gap-2">
+      <button id="vocab-exit" class="text-sm text-stone">← 退出</button>
+      <span class="text-xs text-stone">${escapeHtml(modeLabel)}</span>
+      <span class="text-sm text-stone">${vocabIdx+1}/${vocabQueue.length}</span>
+    </div>
     <div id="vcard" class="relative w-full cursor-pointer" style="height:${w.contextSentence?'28rem':'22rem'};perspective:1200px">
       <div id="vinner" class="relative w-full h-full" style="transition:transform .5s;transform-style:preserve-3d">
         <div class="absolute inset-0 rounded-3xl border ${face.border} shadow-sm flex flex-col items-center justify-center" style="background:${face.bg};backface-visibility:hidden">
-          <div class="flex items-center gap-2 sm:gap-3 px-2"><h2 class="text-3xl sm:text-5xl font-bold break-all text-center">${escapeHtml(w.word)}</h2><button data-speak class="text-2xl shrink-0">🔊</button></div>
+          <div class="flex items-center gap-2 sm:gap-3 px-2">
+            <h2 class="text-3xl sm:text-5xl font-bold break-all text-center">${escapeHtml(w.word)}${failSuffix(w) ? `<span class="text-accent text-2xl sm:text-3xl">${failSuffix(w)}</span>` : ''}</h2>
+            <button data-speak class="text-2xl shrink-0">🔊</button>
+          </div>
           <p class="text-slate-400 mt-3">${escapeHtml(w.phonetic||'')}</p>
           <p class="absolute bottom-6 text-xs text-slate-300">点击查看释义</p>
         </div>
         <div class="absolute inset-0 rounded-3xl border ${face.border} shadow-sm px-8 py-7 overflow-y-auto" style="background:${face.bg};backface-visibility:hidden;transform:rotateY(180deg)">
-          <div class="flex items-center gap-2"><span class="text-2xl font-bold">${escapeHtml(w.word)}</span><button data-speak class="text-lg">🔊</button></div>
+          <div class="flex items-center gap-2"><span class="text-2xl font-bold">${escapeHtml(w.word)}${escapeHtml(failSuffix(w))}</span><button data-speak class="text-lg">🔊</button></div>
           <p class="text-lg mt-3 font-medium">${escapeHtml(w.definition||'')}</p>
           ${w.contextSentence?`<div class="mt-4 bg-slate-100 border-l-4 border-slate-400 rounded-r-xl px-4 py-3"><p class="text-xs font-semibold text-slate-600 mb-1">🎯 你的真题重灾区</p><p class="text-sm italic text-slate-700">「${highlightWordHtml(w.contextSentence,w.word)}」</p></div>`:''}
         </div>
@@ -1256,11 +1380,16 @@ function paintVocabCard(root){
   const inner=root.querySelector('#vinner');
   root.querySelector('#vcard').onclick=()=>{ vocabFlipped=!vocabFlipped; inner.style.transform=vocabFlipped?'rotateY(180deg)':''; if(vocabFlipped) root.querySelector('#grade').classList.remove('hidden'); };
   root.querySelectorAll('[data-speak]').forEach(b=>b.onclick=e=>{e.stopPropagation();speak(w.word);});
-  root.querySelector('#vocab-exit').onclick=()=>{ detachVocabKey(); root.innerHTML=renderVocab(); mountVocab(root); };
+  root.querySelector('#vocab-exit').onclick=()=>returnFromVocabSession(root);
   root.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{
     gradeWord(w.id, b.dataset.g==='1');
     vocabIdx++;
-    if(vocabIdx>=vocabQueue.length){ detachVocabKey(); root.innerHTML=`<div class="max-w-2xl mx-auto bg-white rounded-2xl p-10 text-center border"><p class="text-xl font-semibold">今日任务完成 🎉</p><button id="vocab-back2" class="mt-4 bg-brand-600 text-white px-4 py-2 rounded-lg text-sm">返回</button></div>`; root.querySelector('#vocab-back2').onclick=()=>{root.innerHTML=renderVocab();mountVocab(root);}; return; }
+    if(vocabIdx>=vocabQueue.length){
+      detachVocabKey();
+      root.innerHTML=`<div class="max-w-2xl mx-auto glass-panel p-10 text-center"><p class="display-title text-2xl font-semibold">${doneTitle}</p><button id="vocab-back2" class="btn-spring btn-primary mt-4">返回</button></div>`;
+      root.querySelector('#vocab-back2').onclick=()=>returnFromVocabSession(root);
+      return;
+    }
     paintVocabCard(root);
   });
   detachVocabKey();
@@ -1275,17 +1404,76 @@ function paintVocabCard(root){
 function detachVocabKey(){ if(vocabKeyHandler){ document.removeEventListener('keydown',vocabKeyHandler); vocabKeyHandler=null; } }
 
 function renderMistakes(){
-  const list = activeBook().words.filter(w=>w.mistakeLevel>0).sort((a,b)=>b.mistakeLevel-a.mistakeLevel);
-  if(!list.length) return `<div class="max-w-3xl mx-auto bg-white rounded-2xl p-12 border border-dashed text-center text-slate-500">暂无错词，继续加油！</div>`;
-  return `<div class="max-w-3xl mx-auto space-y-3 view-fade">${list.map(w=>`
-    <div class="bg-white rounded-xl border border-slate-200 p-4 flex items-start justify-between gap-3">
-      <div><div class="flex items-center gap-2"><span class="font-bold text-lg">${escapeHtml(w.word)}</span><button data-speak="${escapeAttr(w.word)}" class="text-lg">🔊</button>
-      ${w.mistakeLevel>=2?'<span class="text-xs text-accent bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">🖍️ 重点</span>':'<span class="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">✍️ 错词</span>'}</div>
-      <p class="text-sm text-slate-600 mt-1">${escapeHtml(w.definition||'')}</p>
-      ${w.contextSentence?`<p class="text-xs text-slate-500 italic mt-2">「${highlightWordHtml(w.contextSentence,w.word)}」</p>`:''}
-      </div></div>`).join('')}</div>`;
+  const groups = getMistakesGroupedByDay();
+  const days = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+  const total = new Set(activeBook().words.filter(isMistakeWord).map(w=>w.id)).size;
+
+  if(!days.length){
+    return `<div class="max-w-3xl mx-auto glass-panel p-12 text-center view-fade">
+      <p class="display-title text-xl font-semibold text-ink">错词本还是空的</p>
+      <p class="text-sm text-stone mt-2">背词时点「不认识」的词，会按天数自动归类到这里。</p>
+    </div>`;
+  }
+
+  const dayChecks = days.map(d=>{
+    const n = groups[d].length;
+    return `<label class="flex items-center gap-1.5 border border-white/50 bg-white/40 rounded-xl px-2.5 py-2 text-xs cursor-pointer">
+      <input type="checkbox" class="m-retest-day" value="${d}" />
+      <span>第 ${d} 天 <span class="text-stone">(${n})</span></span>
+    </label>`;
+  }).join('');
+
+  const sections = days.map(d=>{
+    const list = groups[d];
+    const rows = list.map(w=>`
+      <div class="glass-panel !rounded-xl p-4">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-bold text-lg text-ink">${escapeHtml(w.word)}${failSuffix(w) ? `<span class="text-accent font-semibold">${failSuffix(w)}</span>` : ''}</span>
+              <button type="button" data-speak="${escapeAttr(w.word)}" class="text-lg">🔊</button>
+              ${(w.unknownCount||0)>=2 || (w.mistakeLevel||0)>=2
+                ? '<span class="text-[11px] text-accent bg-red-50/80 border border-red-200 px-2 py-0.5 rounded-full">多次未掌握</span>'
+                : '<span class="text-[11px] text-amber-700 bg-amber-50/80 border border-amber-200 px-2 py-0.5 rounded-full">待巩固</span>'}
+            </div>
+            ${w.phonetic ? `<p class="text-xs text-stone mt-1">${escapeHtml(w.phonetic)}</p>` : ''}
+            <p class="text-sm text-ink/90 mt-2 leading-relaxed">${escapeHtml(w.definition || '（暂无释义）')}</p>
+            ${w.contextSentence ? `<p class="text-xs text-stone italic mt-2">「${highlightWordHtml(w.contextSentence, w.word)}」</p>` : ''}
+          </div>
+        </div>
+      </div>`).join('');
+    return `<section class="space-y-3">
+      <h3 class="display-title text-lg font-semibold text-ink px-1">第 ${d} 天 · ${list.length} 个错词</h3>
+      ${rows}
+    </section>`;
+  }).join('<div class="h-2"></div>');
+
+  return `<div class="max-w-3xl mx-auto space-y-5 view-fade">
+    <div class="glass-panel p-5">
+      <h2 class="display-title text-xl font-semibold">错词本</h2>
+      <p class="text-xs text-stone mt-1">共 ${total} 词 · 按失败天数分类 · 第 2 次仍不会起标注（2）（3）…</p>
+      <p class="text-xs text-stone mt-3 mb-2">选择天数，开始与「单词记忆」相同的再测试自检：</p>
+      <div class="flex flex-wrap gap-2">${dayChecks}</div>
+      <button id="m-retest-btn" class="btn-spring btn-primary mt-4">开始再测试</button>
+      <p id="m-retest-msg" class="text-xs text-stone mt-2"></p>
+    </div>
+    ${sections}
+  </div>`;
 }
-function mountMistakes(root){ root.querySelectorAll('[data-speak]').forEach(b=>b.onclick=()=>speak(b.dataset.speak)); }
+
+function mountMistakes(root){
+  root.querySelectorAll('[data-speak]').forEach(b=>b.onclick=()=>speak(b.dataset.speak));
+  root.querySelector('#m-retest-btn')?.addEventListener('click', ()=>{
+    const days = [...root.querySelectorAll('.m-retest-day:checked')].map(el=>Number(el.value));
+    const msg = root.querySelector('#m-retest-msg');
+    if(!days.length){
+      msg.textContent = '请先勾选至少一天。';
+      msg.className = 'text-xs text-accent mt-2';
+      return;
+    }
+    startMistakeRetest(root, days);
+  });
+}
 
 let lastArticle='', activeTip=null;
 function renderPractice(){
