@@ -371,6 +371,8 @@ let cloud = {
 };
 let syncTimer = null;
 let syncing = false;
+/** 首轮云端拉取完成前，禁止自动推送（防止空库覆盖云端 1300+ 词） */
+let cloudHydrated = false;
 /** 背词会话模式：daily 日常 / retest 错词再测试 */
 let vocabMode = 'daily';
 
@@ -451,15 +453,70 @@ function byImportOrder(a, b){
   return String(a.word||'').localeCompare(String(b.word||''));
 }
 
-function defaultBook(){
+function defaultBook(name){
   return {
     id: makeId('book'),
-    name: '我的 GRE 词书',
+    name: (name && String(name).trim()) || '我的 GRE 词书',
     currentPlanDay: 1,
     words: [], // 默认 0 词，由你按天上传
     practiceHistory: [],
     progress: { wordsLearnedToday:0, todayTarget:0, todayTargetDate:null, lastActiveDate:todayStr() },
   };
+}
+
+function countWordsInState(st){
+  return (st?.wordbooks || []).reduce((n, b) => n + ((b.words && b.words.length) || 0), 0);
+}
+
+function listWordbooks(){
+  return state.wordbooks.map(b => ({
+    id: b.id,
+    name: b.name,
+    wordCount: (b.words || []).length,
+    day: b.currentPlanDay || 1,
+  }));
+}
+
+function switchWordbook(id){
+  const book = state.wordbooks.find(b => b.id === id);
+  if(!book) return { ok:false, message:'词书不存在' };
+  state.activeBookId = id;
+  book.progress = book.progress || {};
+  book.progress.todayTarget = 0;
+  book.progress.todayTargetDate = null;
+  persist();
+  window.dispatchEvent(new Event('gre:progress'));
+  return { ok:true, book };
+}
+
+function createWordbook(name){
+  const book = defaultBook(name);
+  state.wordbooks.push(book);
+  state.activeBookId = book.id;
+  persist();
+  window.dispatchEvent(new Event('gre:progress'));
+  return { ok:true, book };
+}
+
+function renameWordbook(id, name){
+  const book = state.wordbooks.find(b => b.id === id);
+  if(!book) return { ok:false, message:'词书不存在' };
+  const n = String(name||'').trim();
+  if(!n) return { ok:false, message:'名称不能为空' };
+  book.name = n;
+  persist();
+  return { ok:true, book };
+}
+
+function deleteWordbook(id){
+  if(state.wordbooks.length <= 1) return { ok:false, message:'至少保留一本词书' };
+  const victim = state.wordbooks.find(b => b.id === id);
+  if(!victim) return { ok:false, message:'词书不存在' };
+  state.wordbooks = state.wordbooks.filter(b => b.id !== id);
+  if(state.activeBookId === id) state.activeBookId = state.wordbooks[0].id;
+  persist();
+  window.dispatchEvent(new Event('gre:progress'));
+  return { ok:true, message:`已删除「${victim.name}」` };
 }
 
 function countByTargetDay(){
@@ -980,24 +1037,56 @@ function buildCloudPayload(){
   };
 }
 
-async function findOrCreateGist(){
-  if(cloud.gistId){
-    try{
-      const g = await ghFetch('/gists/'+cloud.gistId);
-      if(g?.id) return g;
-    }catch{ cloud.gistId=null; }
+async function scoreGistCandidate(gistId){
+  try{
+    const g = await ghFetch('/gists/'+gistId);
+    const payload = await readGistPayload(g);
+    const words = countWordsInState(payload?.state);
+    const at = Number(payload?.updatedAt) || Date.parse(g.updated_at) || 0;
+    return { g, payload, words, at };
+  }catch{
+    return null;
   }
-  // 扫描最近 gists，找标记文件
-  const list = await ghFetch('/gists?per_page=50');
-  const found = (list||[]).find(g =>
+}
+
+async function findOrCreateGist(){
+  // 1) 已记住的 gistId：先验证；若为空库再继续找更完整的
+  let remembered = null;
+  if(cloud.gistId){
+    remembered = await scoreGistCandidate(cloud.gistId);
+    if(remembered && remembered.words > 0){
+      cloud.gistId = remembered.g.id;
+      return remembered.g;
+    }
+  }
+
+  // 2) 扫描最近 gists：可能有多份（旧 bug 会建空库），选词数最多 / 最新的
+  const list = await ghFetch('/gists?per_page=100');
+  const candidates = (list||[]).filter(g =>
     (g.description||'').includes(GIST_MARKER) ||
     (g.files && g.files[GIST_FILENAME])
   );
-  if(found){
-    cloud.gistId = found.id;
-    return await ghFetch('/gists/'+found.id);
+
+  let best = remembered && remembered.g ? remembered : null;
+  for(const c of candidates){
+    if(best && c.id === best.g.id) continue;
+    const scored = await scoreGistCandidate(c.id);
+    if(!scored) continue;
+    if(!best){ best = scored; continue; }
+    if(scored.words > best.words){ best = scored; continue; }
+    if(scored.words === best.words && scored.at > best.at){ best = scored; }
   }
-  // 新建私有 Gist
+
+  if(best?.g){
+    cloud.gistId = best.g.id;
+    const meta = loadAuthMeta() || {};
+    if(meta.login || meta.mode){
+      saveAuthMeta({ ...meta, gistId: cloud.gistId, login: cloud.login || meta.login });
+    }
+    return best.g;
+  }
+
+  // 3) 确实没有同步 Gist 才新建（避免空库覆盖）
   const created = await ghFetch('/gists', {
     method:'POST',
     body: JSON.stringify({
@@ -1017,50 +1106,100 @@ async function findOrCreateGist(){
 function applyRemoteState(payload){
   if(!payload?.state?.wordbooks?.length) return false;
   state = payload.state;
+  if(!state.activeBookId && state.wordbooks[0]) state.activeBookId = state.wordbooks[0].id;
   state.wordbooks.forEach(b=>{
     if(!Array.isArray(b.practiceHistory)) b.practiceHistory=[];
     if(!Array.isArray(b.words)) b.words=[];
+    if(!b.name) b.name = '未命名词书';
+    if(!b.currentPlanDay) b.currentPlanDay = 1;
+    if(!b.progress) b.progress = { wordsLearnedToday:0, todayTarget:0, todayTargetDate:null, lastActiveDate:todayStr() };
     stripLegacySeedWords(b);
   });
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   return true;
 }
 
-async function pullFromGist(){
-  const gist = await findOrCreateGist();
+async function readGistPayload(gist){
   const file = gist.files?.[GIST_FILENAME];
-  if(!file) return { ok:true, message:'云端尚无数据，将在下次保存时上传', pulled:false };
+  if(!file) return null;
   let content = file.content;
-  if(!content && file.raw_url){
-    const r = await fetch(file.raw_url, {
+  if((!content || file.truncated) && file.raw_url){
+    const r = await fetch(file.raw_url + (file.raw_url.includes('?')?'&':'?') + 't=' + Date.now(), {
       headers:{ Authorization:`Bearer ${cloud.token}`, Accept:'application/vnd.github.raw' },
+      cache: 'no-store',
     });
     content = await r.text();
   }
-  const payload = JSON.parse(content);
-  const remoteAt = Number(payload.updatedAt)||0;
-  const localRaw = localStorage.getItem(STORAGE_KEY);
-  let localAt = 0;
-  try{
-    // 用 meta 或启发式：没有本地时间戳时，若本地几乎是默认则拉云端
-    const meta = loadAuthMeta();
-    localAt = Number(meta?.localUpdatedAt)||0;
-  }catch{}
-  // 若云端更新，覆盖本地
-  if(remoteAt >= localAt){
-    applyRemoteState(payload);
-    cloud.lastSyncAt = Date.now();
-    persistAuthSide();
-    return { ok:true, message:'已从云端拉取最新进度', pulled:true, remoteAt };
-  }
-  cloud.lastSyncAt = Date.now();
-  persistAuthSide();
-  return { ok:true, message:'本地更新，保留本地数据（稍后会推送）', pulled:false, remoteAt };
+  if(!content) return null;
+  return JSON.parse(content);
 }
 
-async function pushToGist(){
-  if(!cloud.token) return { ok:false, message:'未登录' };
+/**
+ * 拉取云端。规则：
+ * - 本地 0 词而云端有词 → 必须用云端（修跨设备不同步）
+ * - force / 云端更新时间更新 → 用云端
+ * - 本地更新且本地词更多 → 保留本地
+ */
+async function pullFromGist(opts={}){
+  const force = opts.force === true;
   const gist = await findOrCreateGist();
+  const payload = await readGistPayload(gist);
+  if(!payload?.state) return { ok:true, message:'云端尚无数据，将在本地有内容后自动上传', pulled:false };
+
+  const remoteAt = Number(payload.updatedAt) || 0;
+  const remoteWords = countWordsInState(payload.state);
+  const localWords = countWordsInState(state);
+  const localAt = Number(loadAuthMeta()?.localUpdatedAt) || 0;
+
+  let takeRemote = false;
+  let reason = '';
+  if(force){ takeRemote = true; reason = '强制拉取'; }
+  else if(localWords === 0 && remoteWords > 0){ takeRemote = true; reason = '本地为空，已接入云端词库'; }
+  else if(remoteWords > localWords && remoteAt >= localAt){ takeRemote = true; reason = '云端词库更新/更完整'; }
+  else if(remoteAt > localAt){ takeRemote = true; reason = '云端时间戳更新'; }
+  else if(remoteWords > localWords){ takeRemote = true; reason = '云端词数更多'; }
+
+  if(takeRemote){
+    applyRemoteState(payload);
+    cloud.lastSyncAt = Date.now();
+    const meta = loadAuthMeta() || {};
+    meta.localUpdatedAt = remoteAt || Date.now();
+    meta.lastSyncAt = cloud.lastSyncAt;
+    meta.gistId = cloud.gistId;
+    meta.login = cloud.login;
+    saveAuthMeta(meta);
+    return { ok:true, message:`已从云端同步：${reason}（${remoteWords} 词）`, pulled:true, remoteAt, remoteWords };
+  }
+
+  cloud.lastSyncAt = Date.now();
+  persistAuthSide();
+  return {
+    ok:true,
+    message: localWords > remoteWords
+      ? `本地更新（${localWords} 词），将自动推送到云端`
+      : '已是最新',
+    pulled:false,
+    remoteAt,
+    remoteWords,
+  };
+}
+
+async function pushToGist(opts={}){
+  if(!cloud.token) return { ok:false, message:'未登录' };
+  const localWords = countWordsInState(state);
+  const gist = await findOrCreateGist();
+
+  // 安全阀：禁止用空本地覆盖非空云端
+  if(!opts.force && localWords === 0){
+    try{
+      const remote = await readGistPayload(gist);
+      const remoteWords = countWordsInState(remote?.state);
+      if(remoteWords > 0){
+        return { ok:false, message:`本地为空，已拒绝覆盖云端（${remoteWords} 词）。请点「立即拉取」。` };
+      }
+    }catch{}
+  }
+
   const payload = buildCloudPayload();
   await ghFetch('/gists/'+gist.id, {
     method:'PATCH',
@@ -1072,32 +1211,32 @@ async function pushToGist(){
   });
   cloud.lastSyncAt = Date.now();
   const meta = loadAuthMeta()||{};
-  meta.localUpdatedAt = payload.updatedAt;
-  meta.lastSyncAt = cloud.lastSyncAt;
-  meta.gistId = cloud.gistId;
-  meta.login = cloud.login;
-  saveAuthMeta({ ...meta, localUpdatedAt: payload.updatedAt, lastSyncAt: cloud.lastSyncAt, gistId: cloud.gistId, login: cloud.login });
-  return { ok:true, message:'已同步到云端 Gist', at: payload.updatedAt };
+  saveAuthMeta({
+    ...meta,
+    localUpdatedAt: payload.updatedAt,
+    lastSyncAt: cloud.lastSyncAt,
+    gistId: cloud.gistId,
+    login: cloud.login,
+  });
+  return { ok:true, message:`已推送到云端（${localWords} 词）`, at: payload.updatedAt };
 }
 
 function scheduleCloudPush(){
-  const meta = loadAuthMeta()||{};
-  meta.localUpdatedAt = Date.now();
-  if(cloud.login) meta.login = cloud.login;
-  if(cloud.gistId) meta.gistId = cloud.gistId;
-  saveAuthMeta({ ...(loadAuthMeta()||{}), ...meta });
+  // 首轮拉取完成前绝不推送，也不刷新 localUpdatedAt（否则空库时间戳会压过云端）
+  if(!cloudHydrated) return;
   if(!cloud.token || !cloud.autoSync || syncing) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(async ()=>{
     try{
       syncing = true;
-      await pushToGist();
-      updateSyncBadge('已自动同步');
+      const r = await pushToGist();
+      if(r.ok) updateSyncBadge('已自动同步');
+      else updateSyncBadge(r.message || '同步已跳过');
     }catch(e){
       updateSyncBadge('同步失败: '+(e.message||e));
       console.warn('cloud push failed', e);
     }finally{ syncing=false; }
-  }, 1500);
+  }, 1200);
 }
 
 function persistAuthSide(){
@@ -1136,7 +1275,8 @@ async function githubLogin(token, opts={}){
   cloud.autoSync = opts.autoSync !== false;
   cloud.unlocked = true;
 
-  // Token 保存策略
+  // Token 保存策略（登录时先不抬高 localUpdatedAt，避免挡住云端拉取）
+  const prevMeta = loadAuthMeta() || {};
   if(opts.remember){
     const pass = String(opts.passphrase||'').trim();
     if(pass.length < 4) throw new Error('记住登录时，保护密码至少 4 位');
@@ -1145,10 +1285,10 @@ async function githubLogin(token, opts={}){
       mode: 'encrypted',
       enc,
       login: cloud.login,
-      gistId: cloud.gistId,
+      gistId: cloud.gistId || prevMeta.gistId || null,
       lastSyncAt: cloud.lastSyncAt,
       autoSync: cloud.autoSync,
-      localUpdatedAt: loadAuthMeta()?.localUpdatedAt || Date.now(),
+      localUpdatedAt: prevMeta.localUpdatedAt || 0,
     });
     sessionStorage.removeItem(AUTH_KEY+':session');
   }else{
@@ -1156,21 +1296,25 @@ async function githubLogin(token, opts={}){
     saveAuthMeta({
       mode: 'session',
       login: cloud.login,
-      gistId: cloud.gistId,
+      gistId: cloud.gistId || prevMeta.gistId || null,
       lastSyncAt: cloud.lastSyncAt,
       autoSync: cloud.autoSync,
-      localUpdatedAt: loadAuthMeta()?.localUpdatedAt || Date.now(),
+      localUpdatedAt: prevMeta.localUpdatedAt || 0,
     });
   }
 
   let pull;
   try{
-    pull = await pullFromGist();
-    if(!pull.pulled) await pushToGist();
+    pull = await pullFromGist({ force: countWordsInState(state) === 0 });
+    // 仅当本地确实有内容且比云端新时才推送；绝不在空库时推送
+    if(!pull.pulled && countWordsInState(state) > 0){
+      await pushToGist();
+    }
   }catch(e){
     throw new Error(explainGhError(e));
   }
-  updateSyncBadge(`已登录 @${cloud.login}`);
+  cloudHydrated = true;
+  updateSyncBadge(`已登录 @${cloud.login} · ${countWordsInState(state)} 词`);
   window.dispatchEvent(new Event('gre:progress'));
   return { user, pull };
 }
@@ -1183,7 +1327,11 @@ function githubLogout(){
 
 async function tryRestoreSession(){
   const meta = loadAuthMeta();
-  if(!meta) { updateSyncBadge('未登录'); return; }
+  if(!meta) {
+    updateSyncBadge('未登录');
+    cloudHydrated = true;
+    return;
+  }
   cloud.login = meta.login||null;
   cloud.gistId = meta.gistId||null;
   cloud.lastSyncAt = meta.lastSyncAt||null;
@@ -1194,21 +1342,25 @@ async function tryRestoreSession(){
       cloud.token = t;
       cloud.unlocked = true;
       try{
-        await pullFromGist();
-        updateSyncBadge(`已登录 @${cloud.login}`);
-        renderChrome();
+        updateSyncBadge('正在同步云端…');
+        const r = await pullFromGist({ force: countWordsInState(state) === 0 });
+        updateSyncBadge(`已登录 @${cloud.login} · ${countWordsInState(state)} 词`);
+        if(r.pulled) window.dispatchEvent(new Event('gre:progress'));
       }catch(e){
         updateSyncBadge('会话失效，请重新登录');
         cloud.token=null; cloud.unlocked=false;
       }
     }else{
-      updateSyncBadge(meta.login ? `已记住 @${meta.login}（会话结束，请重新粘贴 Token）` : '未登录');
+      updateSyncBadge(meta.login ? `已记住 @${meta.login}（请重新登录或解锁）` : '未登录');
     }
   }else if(meta.mode==='encrypted'){
-    updateSyncBadge(`@${meta.login||'?'} 待解锁`);
+    updateSyncBadge(`@${meta.login||'?'} 待解锁 · 解锁后自动拉取`);
+    // 未解锁前不标记 hydrated，避免空库时间戳干扰
+    return;
   }else{
     updateSyncBadge(meta.login?`@${meta.login}`:'未登录');
   }
+  cloudHydrated = true;
 }
 
 async function unlockEncrypted(passphrase){
@@ -1220,9 +1372,15 @@ async function unlockEncrypted(passphrase){
   cloud.gistId = meta.gistId;
   cloud.autoSync = meta.autoSync !== false;
   cloud.unlocked = true;
-  await pullFromGist();
-  updateSyncBadge(`已解锁 @${cloud.login}`);
+  // 解锁后：本地为空或词更少时强制对齐云端
+  const r = await pullFromGist({ force: countWordsInState(state) === 0 });
+  if(!r.pulled){
+    try{ await pullFromGist({ force: false }); }catch{}
+  }
+  cloudHydrated = true;
+  updateSyncBadge(`已解锁 @${cloud.login} · ${countWordsInState(state)} 词`);
   window.dispatchEvent(new Event('gre:progress'));
+  return r;
 }
 
 function updateSyncBadge(text){
@@ -1243,7 +1401,7 @@ const routes = [
   {key:'mistakes', label:'错词本', subtitle:'按天归类 · 再测试自检', icon:'📝'},
   {key:'practice', label:'真题演练', subtitle:'阅读语境联动 · 哪里不会点哪里', icon:'🎯'},
   {key:'sentence', label:'长难句', subtitle:'专属真题语境本', icon:'🧩'},
-  {key:'settings', label:'设置', subtitle:'导入词表与计划推进', icon:'⚙️'},
+  {key:'settings', label:'设置', subtitle:'云同步 · 词书 · 导入导出', icon:'⚙️'},
 ];
 
 function renderDashboard(){
@@ -1618,126 +1776,151 @@ function renderSentence(){
 }
 function mountSentence(root){ root.querySelectorAll('[data-speak]').forEach(b=>b.onclick=()=>speak(b.dataset.speak)); }
 
+function settingsSection(title, desc, body){
+  return `<section class="glass-panel p-5 sm:p-6 space-y-3">
+    <div>
+      <h2 class="display-title text-lg font-semibold text-ink">${title}</h2>
+      ${desc ? `<p class="text-xs text-stone mt-1 leading-relaxed">${desc}</p>` : ''}
+    </div>
+    ${body}
+  </section>`;
+}
+
 function renderSettings(){
   const task=getTodayTask();
   const meta=loadAuthMeta();
   const logged = !!(cloud.token && cloud.unlocked);
   const needUnlock = !!(meta?.mode==='encrypted' && !cloud.unlocked);
-  return `<div class="max-w-3xl mx-auto space-y-4 view-fade">
-    <div class="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200">
-      <h2 class="text-lg font-semibold">☁️ GitHub 云同步（免费）</h2>
-      <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-        用你的 GitHub 账号把进度存到<strong>私有 Gist</strong>。手机与电脑打开本页并登录同一账号即可自动同步。
-      </p>
-      <div class="mt-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-600 space-y-1">
-        <p>状态：<span class="font-semibold text-brand-700">${escapeHtml(logged ? ('已登录 @'+cloud.login) : (needUnlock ? ('待解锁 @'+(meta.login||'')) : (meta?.login ? ('曾登录 @'+meta.login) : '未登录')))}</span></p>
-        <p>上次同步：${escapeHtml(formatSyncTime(cloud.lastSyncAt || meta?.lastSyncAt))}</p>
-        <p>Gist：${cloud.gistId || meta?.gistId ? ('…'+String(cloud.gistId||meta.gistId).slice(-8)) : '尚未创建'}</p>
-      </div>
+  const books = listWordbooks();
+  const active = activeBook();
 
-      ${needUnlock ? `
-      <div class="mt-4 space-y-2 border-t border-slate-100 pt-4">
-        <p class="text-sm font-medium text-slate-800">输入保护密码解锁 Token</p>
-        <input id="s-unlock-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码" />
-        <button id="s-unlock" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">解锁并同步</button>
-        <button id="s-forget" class="ml-2 text-sm text-slate-500 underline">清除本地登录</button>
-        <p id="s-unlock-msg" class="text-xs text-slate-400"></p>
-      </div>` : `
-      <div class="mt-4 space-y-3 border-t border-slate-100 pt-4 ${logged?'opacity-60':''}">
-        <p class="text-sm font-medium text-slate-800">1. 创建 Token（推荐 Classic，最省事）</p>
-        <ol class="text-xs text-slate-500 list-decimal pl-4 space-y-1">
-          <li><strong>推荐：</strong>打开 <a class="text-brand-600 underline" target="_blank" rel="noopener" href="https://github.com/settings/tokens/new">创建 Classic Token</a>，勾选 <code class="bg-slate-100 px-1 rounded">gist</code>，生成后复制（以 ghp_ 开头）</li>
-          <li><strong>若坚持细粒度 Token：</strong>在 Account permissions 中设置 <code class="bg-slate-100 px-1 rounded">Gists = Read and write</code>，以及 <code class="bg-slate-100 px-1 rounded">Profile = Read</code>（缺一项就会报 Resource not accessible）</li>
-          <li>不要给 repo 权限；Token 只粘贴到本页，不要发到聊天/截图里</li>
-        </ol>
-        <input id="s-token" type="password" autocomplete="off" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="粘贴 GitHub Token" ${logged?'disabled':''} />
-        <label class="flex items-start gap-2 text-xs text-slate-600">
-          <input id="s-remember" type="checkbox" class="mt-0.5" ${logged?'disabled':''} />
-          <span>记住登录：用「保护密码」加密 Token 后存本机（推荐）。不勾选则仅本次浏览器会话有效。</span>
-        </label>
-        <input id="s-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码（勾选记住登录时必填，≥4 位）" ${logged?'disabled':''} />
-        <div class="flex flex-wrap gap-2">
-          <button id="s-login" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg" ${logged?'disabled':''}>登录并同步</button>
-          ${logged?`<button id="s-logout" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">退出登录</button>
-          <button id="s-pull" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">立即拉取</button>
-          <button id="s-push" class="text-sm border border-slate-200 px-4 py-2 rounded-lg">立即推送</button>`:''}
-        </div>
-        <p id="s-sync-msg" class="text-xs text-slate-400"></p>
-      </div>`}
-
-      <div class="mt-4 text-[11px] text-slate-400 leading-relaxed bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-        <p class="font-semibold text-amber-800 mb-1">Token 如何妥善保存？</p>
-        <p>纯前端页面<strong>无法</strong>做到银行级保密（本机 DevTools 仍可能看到解密后的 Token）。我们采用的最佳实践是：① 只用 gist 权限的细粒度 Token；② 用你设的保护密码 AES-GCM 加密后写入 localStorage；③ 数据放在私有 Gist；④ 公用电脑请勿勾选「记住登录」，用完点退出。若 Token 泄露，立刻在 GitHub 撤销即可。</p>
-      </div>
+  const syncBody = needUnlock ? `
+    <div class="space-y-2 border-t border-white/40 pt-4">
+      <p class="text-sm font-medium text-ink">输入保护密码解锁并自动拉取云端</p>
+      <input id="s-unlock-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码" />
+      <button id="s-unlock" class="btn-spring btn-primary">解锁并同步</button>
+      <button id="s-forget" class="ml-2 text-sm text-stone underline">清除本地登录</button>
+      <p id="s-unlock-msg" class="text-xs text-stone"></p>
+    </div>` : `
+    <div class="rounded-xl bg-white/40 border border-white/50 px-3 py-2 text-xs text-stone space-y-1">
+      <p>状态：<span class="font-semibold text-brand-700">${escapeHtml(logged ? ('已登录 @'+cloud.login) : (meta?.login ? ('曾登录 @'+meta.login) : '未登录'))}</span>
+        · 本地 ${countWordsInState(state)} 词</p>
+      <p>上次同步：${escapeHtml(formatSyncTime(cloud.lastSyncAt || meta?.lastSyncAt))}</p>
+      <p>Gist：${cloud.gistId || meta?.gistId ? ('…'+String(cloud.gistId||meta.gistId).slice(-8)) : '尚未创建'}</p>
     </div>
-
-    <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">计划与词库</h2>
-      <p class="text-sm text-slate-400 mt-1">当前第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 词库 ${getStats().total} 词（默认空库，按天上传）</p>
-      <p class="text-xs text-slate-500 mt-2">已导入：${Object.entries(countByTargetDay()).filter(([d,n])=>n>0).map(([d,n])=>`第${d}天 ${n}词`).join(" · ") || "尚未按天导入单词"}</p>
-      <p class="text-xs text-emerald-700 mt-1">背词顺序：严格按你上传顺序，已关闭乱序。</p>
-      <div class="mt-4 flex flex-wrap items-center gap-2">
-        <button id="s-advance" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">推进到下一天</button>
-        <button id="s-retreat" class="border border-slate-300 bg-white/60 text-ink text-sm font-semibold px-4 py-2 rounded-lg">回到前一天</button>
-        <span id="s-adv-msg" class="text-xs text-slate-400"></span>
+    <div class="space-y-3 ${logged?'opacity-70':''}">
+      <ol class="text-xs text-stone list-decimal pl-4 space-y-1">
+        <li>推荐 <a class="text-brand-600 underline" target="_blank" rel="noopener" href="https://github.com/settings/tokens/new">Classic Token</a>，只勾选 <code class="bg-white/50 px-1 rounded">gist</code></li>
+        <li>手机/电脑用同一账号登录；打开页面会自动拉取。若仍为 0，点「立即拉取」</li>
+      </ol>
+      <input id="s-token" type="password" autocomplete="off" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="粘贴 GitHub Token" ${logged?'disabled':''} />
+      <label class="flex items-start gap-2 text-xs text-stone">
+        <input id="s-remember" type="checkbox" class="mt-0.5" ${logged?'disabled':''} checked />
+        <span>记住登录（保护密码加密 Token，推荐）</span>
+      </label>
+      <input id="s-pass" type="password" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="保护密码（≥4 位）" ${logged?'disabled':''} />
+      <div class="flex flex-wrap gap-2">
+        <button id="s-login" class="btn-spring btn-primary" ${logged?'disabled':''}>登录并同步</button>
+        ${logged?`<button id="s-logout" class="btn-spring btn-ghost">退出登录</button>
+        <button id="s-pull" class="btn-spring btn-ghost">立即拉取</button>
+        <button id="s-push" class="btn-spring btn-ghost">立即推送</button>`:''}
       </div>
-    </div>
+      <p id="s-sync-msg" class="text-xs text-stone"></p>
+    </div>`;
 
-    <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">按天增量导入</h2>
-      <p class="text-xs text-slate-400 mt-1">格式：单词[Tab]音标[Tab]释义；导入顺序 = 背诵顺序；重复自动拦截</p>
-      <label class="block text-sm mt-3 mb-1">分配到第几天？</label>
-      <select id="s-target-day" class="border rounded-lg px-3 py-2 text-sm">
+  const bookOpts = books.map(b =>
+    `<option value="${escapeAttr(b.id)}" ${b.id===state.activeBookId?'selected':''}>${escapeHtml(b.name)}（${b.wordCount} 词 · 第 ${b.day} 天）</option>`
+  ).join('');
+
+  const bookBody = `
+    <label class="block text-sm text-ink mb-1">当前词书</label>
+    <select id="s-book-select" class="w-full border rounded-lg px-3 py-2 text-sm">${bookOpts}</select>
+    <p class="text-xs text-stone">切换词书后：单词表、计划天数、错词本、真题历史各自独立。</p>
+    <div class="flex flex-wrap gap-2 pt-1">
+      <input id="s-book-name" class="flex-1 min-w-[10rem] border rounded-lg px-3 py-2 text-sm" placeholder="新词书名称，如：托福核心" />
+      <button id="s-book-create" class="btn-spring btn-primary">新建词书</button>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button id="s-book-rename" class="btn-spring btn-ghost">重命名当前词书</button>
+      <button id="s-book-delete" class="text-sm text-accent border border-red-200 px-4 py-2 rounded-full">删除当前词书</button>
+    </div>
+    <p id="s-book-msg" class="text-xs text-stone"></p>`;
+
+  const planBody = `
+    <p class="text-sm text-stone">当前「${escapeHtml(active.name)}」· 第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · ${getStats().total} 词</p>
+    <p class="text-xs text-stone">已导入：${Object.entries(countByTargetDay()).filter(([d,n])=>n>0).map(([d,n])=>`第${d}天 ${n}词`).join(' · ') || '尚未按天导入'}</p>
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="s-advance" class="btn-spring btn-primary">推进到下一天</button>
+      <button id="s-retreat" class="btn-spring btn-ghost">回到前一天</button>
+      <span id="s-adv-msg" class="text-xs text-stone"></span>
+    </div>`;
+
+  const importBody = `
+    <p class="text-xs text-stone">格式：单词[Tab]音标[Tab]释义；导入顺序 = 背诵顺序</p>
+    <label class="block text-sm mt-1 mb-1">分配到第几天？</label>
+    <select id="s-target-day" class="border rounded-lg px-3 py-2 text-sm">
+      ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>`<option value="${i+1}">第 ${i+1} 天</option>`).join('')}
+    </select>
+    <textarea id="s-import" rows="5" class="mt-2 w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="numinous\t/ˈnuːmɪnəs/\tadj. 神圣的"></textarea>
+    <button id="s-import-btn" class="btn-spring btn-primary mt-2">导入到指定天</button>
+    <p id="s-import-msg" class="text-xs mt-2"></p>`;
+
+  const exportBody = `
+    <p class="text-xs text-stone">可多选天数；含掌握勾选框；多次未掌握标黄</p>
+    <div id="s-export-days" class="mt-2 grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
+      ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>{
+        const d=i+1; const n=countByTargetDay()[d]||0;
+        return `<label class="flex items-center gap-1 border rounded-lg px-2 py-1.5 ${n?'bg-white/50':'bg-white/20 text-stone/40'}">
+          <input type="checkbox" value="${d}" class="s-ex-day" ${n?'':'disabled'} />
+          <span>D${d}<span class="text-stone">(${n})</span></span>
+        </label>`;
+      }).join('')}
+    </div>
+    <button id="s-export-btn" class="btn-spring btn-primary mt-3">导出选中天为 Word</button>
+    <p id="s-export-msg" class="text-xs mt-2 text-stone"></p>`;
+
+  const clearBody = `
+    <p class="text-xs text-stone">仅清空<strong>当前词书</strong>；可按天或全部清空</p>
+    <div class="flex flex-wrap items-center gap-2 mt-2">
+      <select id="s-clear-day" class="border rounded-lg px-3 py-2 text-sm">
         ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>`<option value="${i+1}">第 ${i+1} 天</option>`).join('')}
       </select>
-      <textarea id="s-import" rows="6" class="mt-3 w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="numinous\t/ˈnuːmɪnəs/\tadj. 神圣的"></textarea>
-      <button id="s-import-btn" class="mt-3 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">导入到指定天</button>
-      <p id="s-import-msg" class="text-xs mt-2"></p>
+      <button id="s-clear-day-btn" class="text-sm border border-amber-300 text-amber-800 bg-amber-50/80 px-4 py-2 rounded-full">清空该天单词</button>
+      <button id="s-clear-all" class="text-sm text-accent border border-red-200 px-4 py-2 rounded-full">清空当前词书全部</button>
     </div>
+    <p id="s-clear-msg" class="text-xs mt-2"></p>`;
 
-    <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">导出 Word 词表</h2>
-      <p class="text-xs text-slate-400 mt-1">格式对齐你的 List 表格；可多选天数；含掌握勾选框；多次未掌握标黄</p>
-      <div id="s-export-days" class="mt-3 grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
-        ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>{
-          const d=i+1; const n=countByTargetDay()[d]||0;
-          return `<label class="flex items-center gap-1 border rounded-lg px-2 py-1.5 ${n? 'bg-white':'bg-slate-50 text-slate-300'}">
-            <input type="checkbox" value="${d}" class="s-ex-day" ${n?'':'disabled'} />
-            <span>D${d}<span class="text-slate-400">(${n})</span></span>
-          </label>`;
-        }).join('')}
-      </div>
-      <button id="s-export-btn" class="mt-4 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">导出选中天为 Word</button>
-      <p id="s-export-msg" class="text-xs mt-2 text-slate-400"></p>
-    </div>
-
-    <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">清空词库</h2>
-      <p class="text-xs text-slate-400 mt-1">可只清空某一天导入的词，或清空全部（不会恢复内置样例词）</p>
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <select id="s-clear-day" class="border rounded-lg px-3 py-2 text-sm">
-          ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>`<option value="${i+1}">第 ${i+1} 天</option>`).join('')}
-        </select>
-        <button id="s-clear-day-btn" class="text-sm border border-amber-300 text-amber-800 bg-amber-50 px-4 py-2 rounded-lg">清空该天单词</button>
-        <button id="s-clear-all" class="text-sm text-accent border border-red-200 px-4 py-2 rounded-lg">清空全部词库</button>
-      </div>
-      <p id="s-clear-msg" class="text-xs mt-2"></p>
-    </div>
+  return `<div class="max-w-3xl mx-auto space-y-4 view-fade">
+    <p class="text-xs text-stone px-1">设置已分类：云同步 · 词书 · 计划 · 导入 · 导出 · 清空</p>
+    ${settingsSection('☁️ 一、云同步', '同一 GitHub 账号跨设备自动对齐。打开页面会先拉取云端，避免空库覆盖。', syncBody)}
+    ${settingsSection('📚 二、词书管理', '多本词书互不影响：单词、天数、错词本、真题历史各自独立。', bookBody)}
+    ${settingsSection('📅 三、计划进度', '针对当前词书推进 / 回退计划天。', planBody)}
+    ${settingsSection('📥 四、按天导入', '把每日词表导入到当前词书的指定天。', importBody)}
+    ${settingsSection('📤 五、导出 Word', '按背诵顺序导出当前词书选中天数。', exportBody)}
+    ${settingsSection('🧹 六、清空', '危险操作，请确认后再点。', clearBody)}
   </div>`;
 }
+
 function mountSettings(root){
   const msg = root.querySelector('#s-sync-msg');
   const setMsg = (t, ok)=>{ if(!msg) return; msg.className='text-xs '+(ok?'text-brand-600':'text-accent'); msg.textContent=t; };
+  const bookMsg = (t, ok)=>{
+    const el = root.querySelector('#s-book-msg');
+    if(!el) return;
+    el.className = 'text-xs '+(ok?'text-brand-600':'text-accent');
+    el.textContent = t;
+  };
 
   root.querySelector('#s-unlock')?.addEventListener('click', async ()=>{
     const m = root.querySelector('#s-unlock-msg');
     try{
-      await unlockEncrypted(root.querySelector('#s-unlock-pass').value);
-      m.className='text-xs text-brand-600'; m.textContent='解锁成功，已同步云端。';
+      const r = await unlockEncrypted(root.querySelector('#s-unlock-pass').value);
+      m.className='text-xs text-brand-600';
+      m.textContent = r?.message || `解锁成功，当前 ${countWordsInState(state)} 词。`;
       renderChrome();
-      setTimeout(()=>{ location.hash='#/settings'; renderRoute(); }, 400);
+      setTimeout(()=>renderRoute(), 300);
     }catch(e){
-      m.className='text-xs text-accent'; m.textContent='解锁失败：'+(e.message||e)+'（密码错误？）';
+      m.className='text-xs text-accent'; m.textContent='解锁失败：'+(e.message||e);
     }
   });
   root.querySelector('#s-forget')?.addEventListener('click', ()=>{
@@ -1748,14 +1931,14 @@ function mountSettings(root){
 
   root.querySelector('#s-login')?.addEventListener('click', async ()=>{
     const token = root.querySelector('#s-token').value;
-    const remember = root.querySelector('#s-remember').checked;
-    const passphrase = root.querySelector('#s-pass').value;
-    setMsg('正在登录 GitHub…', true);
+    const remember = root.querySelector('#s-remember')?.checked;
+    const passphrase = root.querySelector('#s-pass')?.value;
+    setMsg('正在登录并拉取云端…', true);
     try{
       const r = await githubLogin(token, { remember, passphrase, autoSync:true });
-      setMsg(`✅ 登录成功 @${r.user.login}。${r.pull.message}`, true);
+      setMsg(`✅ @${r.user.login} · ${r.pull.message} · 本地 ${countWordsInState(state)} 词`, true);
       renderChrome();
-      setTimeout(()=>renderRoute(), 500);
+      setTimeout(()=>renderRoute(), 400);
     }catch(e){
       setMsg('❌ '+(e.message||e), false);
       cloud.token=null; cloud.unlocked=false;
@@ -1763,15 +1946,51 @@ function mountSettings(root){
   });
   root.querySelector('#s-logout')?.addEventListener('click', ()=>{
     githubLogout();
+    cloudHydrated = true;
     renderRoute();
   });
   root.querySelector('#s-pull')?.addEventListener('click', async ()=>{
-    try{ const r=await pullFromGist(); setMsg(r.message, true); renderChrome(); renderRoute(); }
-    catch(e){ setMsg('❌ '+(e.message||e), false); }
+    try{
+      setMsg('正在拉取…', true);
+      const r = await pullFromGist({ force: true });
+      setMsg(r.message, true);
+      renderChrome();
+      renderRoute();
+    }catch(e){ setMsg('❌ '+(e.message||e), false); }
   });
   root.querySelector('#s-push')?.addEventListener('click', async ()=>{
-    try{ const r=await pushToGist(); setMsg(r.message, true); }
-    catch(e){ setMsg('❌ '+(e.message||e), false); }
+    try{
+      const r = await pushToGist({ force: false });
+      setMsg(r.message, r.ok);
+    }catch(e){ setMsg('❌ '+(e.message||e), false); }
+  });
+
+  root.querySelector('#s-book-select')?.addEventListener('change', (e)=>{
+    const r = switchWordbook(e.target.value);
+    bookMsg(r.ok ? `已切换到「${activeBook().name}」` : r.message, r.ok);
+    renderChrome();
+    setTimeout(()=>renderRoute(), 200);
+  });
+  root.querySelector('#s-book-create')?.addEventListener('click', ()=>{
+    const name = root.querySelector('#s-book-name')?.value || '';
+    const r = createWordbook(name);
+    bookMsg(r.ok ? `已新建「${r.book.name}」` : r.message, r.ok);
+    renderChrome();
+    setTimeout(()=>renderRoute(), 200);
+  });
+  root.querySelector('#s-book-rename')?.addEventListener('click', ()=>{
+    const name = prompt('输入新的词书名称', activeBook().name);
+    if(name==null) return;
+    const r = renameWordbook(state.activeBookId, name);
+    bookMsg(r.ok ? '已重命名' : r.message, r.ok);
+    setTimeout(()=>renderRoute(), 200);
+  });
+  root.querySelector('#s-book-delete')?.addEventListener('click', ()=>{
+    if(!confirm(`确定删除词书「${activeBook().name}」？其中单词与进度将一并删除。`)) return;
+    const r = deleteWordbook(state.activeBookId);
+    bookMsg(r.message || (r.ok?'已删除':''), r.ok);
+    renderChrome();
+    setTimeout(()=>renderRoute(), 200);
   });
 
   const td0=root.querySelector('#s-target-day'); if(td0) td0.value=String(getTodayTask().day);
@@ -1791,7 +2010,7 @@ function mountSettings(root){
     const lines=root.querySelector('#s-import').value.split(/\n/).map(l=>l.trim()).filter(Boolean);
     const day=root.querySelector('#s-target-day').value;
     const r=appendWords(lines, { targetDay: day });
-    root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词到第 ${r.targetDay} 天；词库共 ${r.total} 词（按上传顺序背诵）。</span>`+
+    root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词到第 ${r.targetDay} 天；当前词书共 ${r.total} 词。</span>`+
       (r.skipped?`<div class="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠️ 拦截 ${r.skipped} 个重复：${r.duplicateWords.map(escapeHtml).join(', ')}</div>`:'');
     renderChrome();
     setTimeout(()=>renderRoute(), 300);
@@ -1802,7 +2021,7 @@ function mountSettings(root){
     try{
       const r=exportDaysToWord(days);
       box.className='text-xs text-brand-600';
-      box.textContent=`已导出 ${r.days.length} 天共 ${r.total} 词（.doc，可用 WPS/Word 打开并打勾）。`;
+      box.textContent=`已导出 ${r.days.length} 天共 ${r.total} 词。`;
     }catch(e){
       box.className='text-xs text-accent';
       box.textContent=String(e.message||e);
@@ -1810,18 +2029,18 @@ function mountSettings(root){
   });
   root.querySelector('#s-clear-day-btn')?.addEventListener('click', ()=>{
     const day=root.querySelector('#s-clear-day').value;
-    if(!confirm(`确定清空「第 ${day} 天」导入的全部单词？`)) return;
+    if(!confirm(`确定清空当前词书「第 ${day} 天」的全部单词？`)) return;
     const r=clearWordsByDay(day);
     root.querySelector('#s-clear-msg').className='text-xs text-brand-600';
-    root.querySelector('#s-clear-msg').textContent=`已删除第 ${r.day} 天 ${r.removed} 词，词库剩余 ${r.left} 词。`;
+    root.querySelector('#s-clear-msg').textContent=`已删除第 ${r.day} 天 ${r.removed} 词，剩余 ${r.left} 词。`;
     renderChrome();
     setTimeout(()=>renderRoute(), 300);
   });
   root.querySelector('#s-clear-all')?.addEventListener('click', ()=>{
-    if(!confirm('确定清空全部词库？不会恢复任何内置样例词。')) return;
+    if(!confirm('确定清空当前词书的全部单词？')) return;
     const n=clearAllWords();
     root.querySelector('#s-clear-msg').className='text-xs text-brand-600';
-    root.querySelector('#s-clear-msg').textContent=`已清空 ${n} 词，当前为 0 词空库。`;
+    root.querySelector('#s-clear-msg').textContent=`已清空 ${n} 词。`;
     renderChrome();
     setTimeout(()=>renderRoute(), 300);
   });
@@ -1882,7 +2101,19 @@ window.addEventListener('gre:progress', renderChrome);
 if(!location.hash) location.hash='#/dashboard';
 renderRoute();
 renderChrome();
-tryRestoreSession().then(()=>{ renderChrome(); }).catch(()=>{});
+// 先尝试云端拉取，再允许自动推送；拉取后整页刷新一次数据
+tryRestoreSession()
+  .then(()=>{
+    // 加密待解锁时不要提前 hydrated，等解锁拉完再开自动推送
+    const meta = loadAuthMeta();
+    if(!(meta?.mode==='encrypted' && !cloud.unlocked)) cloudHydrated = true;
+    renderChrome();
+    renderRoute();
+  })
+  .catch((e)=>{
+    console.warn(e);
+    cloudHydrated = true;
+  });
 </script>
 </body>
 </html>
