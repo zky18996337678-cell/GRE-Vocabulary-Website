@@ -3,101 +3,313 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GRE 备考 · 智能学习助手</title>
+  <title>GRE 备考 · Fountain Atelier</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Outfit:wght@340;420;560;650&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
       theme: {
         extend: {
           colors: {
-            brand: { 50:'#eef4fb', 100:'#d9e6f5', 500:'#2b6cb0', 600:'#1f497d', 700:'#173a63' },
-            accent: '#c00000',
+            brand: {
+              50: '#eef3ef',
+              100: '#d9e4db',
+              500: '#6f8578',
+              600: '#5a6f64',
+              700: '#46574e',
+            },
+            accent: '#b07a6a',
+            ink: '#3a3835',
+            mist: '#e7e2db',
+            sage: '#8fa094',
+            stone: '#9c9590',
+            water: '#7e9a9a',
           },
           fontFamily: {
-            sans: ['"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+            display: ['Fraunces', 'Georgia', 'serif'],
+            sans: ['Outfit', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
           },
         },
       },
     };
   </script>
   <style>
-    .nav-item{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;border-radius:.5rem;color:rgba(255,255,255,.75);cursor:pointer;transition:background-color .15s,color .15s}
-    .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
-    .nav-item.active{background:rgba(255,255,255,.15);color:#fff;font-weight:600}
-    .view-fade{animation:fadeIn .2s ease}
-    @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-    .gre-hit{cursor:pointer;border-radius:2px;padding:0 1px}
-    .gre-hit-new{background:#e0f2fe;border-bottom:1.5px dashed #38bdf8;color:#0c4a6e}
-    .gre-hit-mistake{background:#fee2e2;color:#991b1b;font-weight:700}
-    .gre-hit-known{border-bottom:1px dotted #94a3b8}
-    .gre-word-tooltip{position:absolute;z-index:80;width:280px;max-width:calc(100vw - 16px);padding:12px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 28px rgba(15,23,42,.14);font-size:13px}
+    :root{
+      --ink:#3a3835;
+      --mist:#e7e2db;
+      --sage:#8fa094;
+      --stone:#9c9590;
+      --water:#7e9a9a;
+      --clay:#b07a6a;
+      --glass:rgba(255,252,248,.52);
+      --glass-strong:rgba(255,252,248,.72);
+      --glass-line:rgba(255,255,255,.55);
+      --spring:cubic-bezier(.22,1.45,.36,1);
+      --spring-soft:cubic-bezier(.16,1.1,.3,1);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      color:var(--ink);
+      font-family:Outfit,"PingFang SC","Microsoft YaHei",sans-serif;
+      background:#d5d0c8;
+      overflow:hidden;
+    }
+
+    /* 喷泉建筑氛围层 */
+    .fountain-stage{
+      position:fixed;inset:0;z-index:0;pointer-events:none;
+      background:
+        radial-gradient(ellipse 80% 55% at 50% 108%, rgba(126,154,154,.35), transparent 60%),
+        radial-gradient(ellipse 50% 40% at 18% 20%, rgba(176,122,106,.18), transparent 55%),
+        radial-gradient(ellipse 45% 35% at 85% 15%, rgba(143,160,148,.22), transparent 50%),
+        linear-gradient(165deg, #ebe6df 0%, #d8d2c9 42%, #c9cfcb 78%, #b8c4bf 100%);
+    }
+    .fountain-stage::before{
+      content:"";
+      position:absolute;inset:0;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' fill='none'%3E%3Cpath d='M600 780 V420' stroke='%239c9590' stroke-opacity='.28' stroke-width='10'/%3E%3Cpath d='M520 780 H680' stroke='%239c9590' stroke-opacity='.35' stroke-width='14' stroke-linecap='round'/%3E%3Cpath d='M560 420 H640 V360 H560 Z' fill='%239c9590' fill-opacity='.22'/%3E%3Cpath d='M600 360 C520 280 420 220 360 180' stroke='%237e9a9a' stroke-opacity='.35' stroke-width='3'/%3E%3Cpath d='M600 360 C680 280 780 220 840 180' stroke='%237e9a9a' stroke-opacity='.35' stroke-width='3'/%3E%3Cpath d='M600 340 C560 260 500 210 460 180' stroke='%238fa094' stroke-opacity='.28' stroke-width='2.5'/%3E%3Cpath d='M600 340 C640 260 700 210 740 180' stroke='%238fa094' stroke-opacity='.28' stroke-width='2.5'/%3E%3Cellipse cx='600' cy='780' rx='220' ry='28' fill='%237e9a9a' fill-opacity='.16'/%3E%3Cpath d='M180 120 V520' stroke='%239c9590' stroke-opacity='.12' stroke-width='18'/%3E%3Cpath d='M1020 120 V520' stroke='%239c9590' stroke-opacity='.12' stroke-width='18'/%3E%3Cpath d='M140 120 H220' stroke='%239c9590' stroke-opacity='.14' stroke-width='10'/%3E%3Cpath d='M980 120 H1060' stroke='%239c9590' stroke-opacity='.14' stroke-width='10'/%3E%3C/svg%3E");
+      background-size:min(1100px,120%) auto;
+      background-position:center bottom;
+      background-repeat:no-repeat;
+      opacity:.9;
+      animation:fountainDrift 14s var(--spring-soft) infinite alternate;
+    }
+    .fountain-stage::after{
+      content:"";
+      position:absolute;inset:0;
+      background:
+        radial-gradient(circle at 50% 72%, rgba(255,255,255,.35) 0 2px, transparent 3px),
+        radial-gradient(circle at 42% 68%, rgba(255,255,255,.25) 0 1.5px, transparent 2.5px),
+        radial-gradient(circle at 58% 66%, rgba(255,255,255,.22) 0 1.5px, transparent 2.5px);
+      background-size:100% 100%;
+      animation:mistRise 8s ease-in-out infinite alternate;
+      opacity:.55;
+    }
+    @keyframes fountainDrift{
+      from{transform:translateY(0) scale(1)}
+      to{transform:translateY(-10px) scale(1.02)}
+    }
+    @keyframes mistRise{
+      from{transform:translateY(8px);opacity:.35}
+      to{transform:translateY(-6px);opacity:.65}
+    }
+
+    #app-shell{position:relative;z-index:1;height:100%}
+
+    /* 玻璃拟态 */
+    .glass-panel{
+      background:var(--glass);
+      backdrop-filter:blur(18px) saturate(1.15);
+      -webkit-backdrop-filter:blur(18px) saturate(1.15);
+      border:1px solid var(--glass-line);
+      box-shadow:
+        0 10px 40px rgba(58,56,53,.08),
+        inset 0 1px 0 rgba(255,255,255,.65);
+      border-radius:1.35rem;
+    }
+    .glass-panel-strong{
+      background:var(--glass-strong);
+      backdrop-filter:blur(22px) saturate(1.2);
+      -webkit-backdrop-filter:blur(22px) saturate(1.2);
+      border:1px solid var(--glass-line);
+      box-shadow:0 12px 36px rgba(58,56,53,.1), inset 0 1px 0 rgba(255,255,255,.7);
+      border-radius:1.35rem;
+    }
+    .glass-sidebar{
+      background:rgba(90,111,100,.42);
+      backdrop-filter:blur(24px) saturate(1.2);
+      -webkit-backdrop-filter:blur(24px) saturate(1.2);
+      border-right:1px solid rgba(255,255,255,.28);
+      color:#f7f4ef;
+      box-shadow:8px 0 40px rgba(58,56,53,.08);
+    }
+
+    .nav-item{
+      display:flex;align-items:center;gap:.75rem;
+      padding:.7rem .9rem;border-radius:.9rem;
+      color:rgba(247,244,239,.78);
+      cursor:pointer;
+      transition:transform .45s var(--spring), background .35s var(--spring-soft), color .25s ease;
+    }
+    .nav-item:hover{
+      background:rgba(255,255,255,.14);
+      color:#fff;
+      transform:translateX(4px) scale(1.02);
+    }
+    .nav-item.active{
+      background:rgba(255,255,255,.22);
+      color:#fff;font-weight:600;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.2);
+      transform:translateX(2px);
+    }
+
+    .btn-spring{
+      display:inline-flex;align-items:center;justify-content:center;
+      border-radius:999px;
+      padding:.65rem 1.25rem;
+      font-weight:560;font-size:.875rem;
+      transition:transform .45s var(--spring), box-shadow .4s var(--spring-soft), background .25s ease;
+      will-change:transform;
+    }
+    .btn-spring:hover{transform:translateY(-3px) scale(1.03)}
+    .btn-spring:active{transform:translateY(1px) scale(.97);transition-duration:.12s}
+    .btn-primary{
+      background:linear-gradient(145deg,#6f8578,#5a6f64);
+      color:#fff;
+      box-shadow:0 8px 20px rgba(90,111,100,.28);
+    }
+    .btn-primary:hover{box-shadow:0 14px 28px rgba(90,111,100,.35)}
+    .btn-ghost{
+      background:rgba(255,252,248,.45);
+      border:1px solid rgba(255,255,255,.55);
+      color:var(--ink);
+    }
+
+    .view-fade{animation:springIn .55s var(--spring) both}
+    @keyframes springIn{
+      0%{opacity:0;transform:translateY(18px) scale(.96)}
+      60%{opacity:1;transform:translateY(-4px) scale(1.015)}
+      100%{opacity:1;transform:translateY(0) scale(1)}
+    }
+
+    .stat-tile{
+      background:rgba(255,252,248,.4);
+      border:1px solid rgba(255,255,255,.5);
+      border-radius:1rem;
+      padding:1rem;
+      transition:transform .5s var(--spring), background .3s ease;
+    }
+    .stat-tile:hover{transform:translateY(-4px) scale(1.03);background:rgba(255,252,248,.62)}
+
+    .gre-hit{cursor:pointer;border-radius:3px;padding:0 2px;transition:transform .35s var(--spring)}
+    .gre-hit:hover{transform:translateY(-1px) scale(1.04)}
+    .gre-hit-new{background:rgba(126,154,154,.22);border-bottom:1.5px dashed #7e9a9a;color:#3f5555}
+    .gre-hit-mistake{background:rgba(176,122,106,.28);color:#7a4538;font-weight:700}
+    .gre-hit-known{border-bottom:1px dotted #9c9590}
+    .gre-word-tooltip{
+      position:absolute;z-index:80;width:280px;max-width:calc(100vw - 16px);
+      padding:12px 14px;border-radius:16px;font-size:13px;
+      background:rgba(255,252,248,.88);
+      backdrop-filter:blur(16px);
+      border:1px solid rgba(255,255,255,.65);
+      box-shadow:0 16px 40px rgba(58,56,53,.16);
+      animation:springIn .4s var(--spring);
+    }
+
     .practice-history-scroll{scrollbar-width:thin}
     #view::-webkit-scrollbar{width:8px}
-    #view::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+    #view::-webkit-scrollbar-thumb{background:rgba(156,149,144,.45);border-radius:4px}
 
-    /* 手机端：侧栏变抽屉，主内容全宽 */
-    .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:40}
+    .display-title{font-family:Fraunces,Georgia,serif;letter-spacing:-.02em}
+
+    .progress-track{height:6px;border-radius:999px;background:rgba(255,255,255,.18);overflow:hidden}
+    .progress-fill{
+      height:100%;border-radius:999px;
+      background:linear-gradient(90deg,#c9b2a6,#7e9a9a);
+      transition:width .7s var(--spring);
+    }
+
+    .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(58,56,53,.35);backdrop-filter:blur(2px);z-index:40}
     body.drawer-open{overflow:hidden}
     body.drawer-open .sidebar-overlay{display:block}
     @media (max-width:767px){
       #app-shell{display:block;height:100%;position:relative}
       #sidebar{
         position:fixed;top:0;left:0;bottom:0;width:min(18rem,82vw);z-index:50;
-        transform:translateX(-105%);transition:transform .22s ease;
-        box-shadow:none;
+        transform:translateX(-105%);
+        transition:transform .55s var(--spring);
       }
-      body.drawer-open #sidebar{transform:translateX(0);box-shadow:8px 0 24px rgba(15,23,42,.2)}
+      body.drawer-open #sidebar{transform:translateX(0)}
       #main-pane{height:100%;width:100%;min-width:0}
-      #page-subtitle{display:none}
-      #today-date{display:none}
+      #page-subtitle,#today-date{display:none}
     }
     @media (min-width:768px){
       #menu-btn{display:none!important}
       .sidebar-overlay{display:none!important}
-      #sidebar{transform:none!important;position:relative;box-shadow:none!important}
+      #sidebar{transform:none!important;position:relative}
+    }
+
+    /* 覆盖常见 Tailwind 实心白卡片为玻璃感（运行时 HTML 仍可用旧 class） */
+    #view .bg-white{
+      background:rgba(255,252,248,.55)!important;
+      backdrop-filter:blur(16px);
+      -webkit-backdrop-filter:blur(16px);
+      border-color:rgba(255,255,255,.55)!important;
+      box-shadow:0 10px 32px rgba(58,56,53,.07);
+    }
+    #view .bg-slate-50{
+      background:rgba(255,252,248,.35)!important;
+      border-color:rgba(255,255,255,.4)!important;
+    }
+    #view .bg-brand-600,#view button.bg-brand-600, #view a.bg-brand-600{
+      background:linear-gradient(145deg,#6f8578,#5a6f64)!important;
+      border-radius:999px!important;
+      box-shadow:0 8px 20px rgba(90,111,100,.25);
+      transition:transform .45s var(--spring), box-shadow .4s ease;
+    }
+    #view .bg-brand-600:hover,#view a.bg-brand-600:hover,#view button.bg-brand-600:hover{
+      transform:translateY(-2px) scale(1.02);
+    }
+    #view .text-brand-600,#view .text-brand-700{color:#5a6f64!important}
+    #view .text-accent{color:#b07a6a!important}
+    #view .border-slate-200{border-color:rgba(255,255,255,.5)!important}
+    #view input,#view textarea,#view select{
+      background:rgba(255,252,248,.55)!important;
+      border-color:rgba(156,149,144,.35)!important;
+      border-radius:.85rem!important;
+    }
+    #view input:focus,#view textarea:focus,#view select:focus{
+      outline:none;
+      box-shadow:0 0 0 3px rgba(126,154,154,.25);
+      border-color:rgba(126,154,154,.55)!important;
     }
   </style>
 </head>
-<body class="h-screen bg-slate-50 text-slate-800 font-sans antialiased">
+<body class="h-screen text-ink font-sans antialiased">
+  <div class="fountain-stage" aria-hidden="true"></div>
   <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
   <div id="app-shell" class="flex h-full">
-    <aside id="sidebar" class="w-64 shrink-0 bg-brand-600 text-white flex flex-col">
-      <div class="h-16 flex items-center justify-between gap-3 px-5 border-b border-white/10">
+    <aside id="sidebar" class="glass-sidebar w-64 shrink-0 flex flex-col">
+      <div class="h-16 flex items-center justify-between gap-3 px-5 border-b border-white/15">
         <div class="flex items-center gap-3 min-w-0">
-          <div class="w-9 h-9 rounded-lg bg-white/15 flex items-center justify-center font-bold text-lg shrink-0">G</div>
+          <div class="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center font-display text-lg shrink-0 shadow-inner">⛲</div>
           <div class="min-w-0">
-            <p class="font-semibold leading-tight">GRE 备考</p>
-            <p class="text-xs text-white/60 leading-tight">智能学习助手</p>
+            <p class="font-display font-semibold leading-tight tracking-tight">Fountain GRE</p>
+            <p class="text-[11px] text-white/65 leading-tight">静心备考工坊</p>
           </div>
         </div>
-        <button id="drawer-close" type="button" class="md:hidden w-9 h-9 rounded-lg bg-white/10 text-white text-xl leading-none" aria-label="关闭菜单">×</button>
+        <button id="drawer-close" type="button" class="md:hidden w-9 h-9 rounded-xl bg-white/10 text-white text-xl leading-none" aria-label="关闭菜单">×</button>
       </div>
       <div class="px-4 py-3 border-b border-white/10">
-        <p class="text-[10px] uppercase tracking-wider text-white/40 mb-1">当前词书</p>
-        <p id="active-book-name" class="text-sm font-semibold text-white truncate">KMF 核心词</p>
+        <p class="text-[10px] uppercase tracking-[0.14em] text-white/45 mb-1">当前词书</p>
+        <p id="active-book-name" class="text-sm font-semibold text-white truncate">我的 GRE 词书</p>
       </div>
       <nav id="nav" class="flex-1 px-3 py-4 space-y-1 text-sm overflow-y-auto"></nav>
-      <div class="px-6 py-4 border-t border-white/10 text-xs text-white/70">
-        <p class="mb-1">今日目标</p>
-        <div class="h-1.5 rounded-full bg-white/15 overflow-hidden">
-          <div id="daily-progress-bar" class="h-full bg-accent transition-all" style="width:0%"></div>
+      <div class="px-5 py-4 border-t border-white/10 text-xs text-white/75">
+        <p class="mb-1.5 tracking-wide">今日目标</p>
+        <div class="progress-track">
+          <div id="daily-progress-bar" class="progress-fill" style="width:0%"></div>
         </div>
-        <p id="daily-progress-text" class="mt-1.5 text-white/50">尚未开始</p>
+        <p id="daily-progress-text" class="mt-1.5 text-white/55">尚未开始</p>
       </div>
     </aside>
 
     <div id="main-pane" class="flex-1 flex flex-col min-w-0">
-      <header class="h-14 md:h-16 shrink-0 bg-white border-b border-slate-200 flex items-center justify-between gap-3 px-3 md:px-8">
+      <header class="h-14 md:h-16 shrink-0 mx-2 mt-2 md:mx-4 md:mt-3 glass-panel-strong flex items-center justify-between gap-3 px-3 md:px-6 !rounded-2xl">
         <div class="flex items-center gap-2 min-w-0">
-          <button id="menu-btn" type="button" class="shrink-0 w-10 h-10 rounded-lg border border-slate-200 text-slate-700 text-lg hover:bg-slate-50" aria-label="打开菜单">☰</button>
+          <button id="menu-btn" type="button" class="shrink-0 w-10 h-10 rounded-xl border border-white/50 bg-white/30 text-ink text-lg hover:scale-105 transition" style="transition-timing-function:var(--spring)" aria-label="打开菜单">☰</button>
           <div class="min-w-0">
-            <h1 id="page-title" class="text-base md:text-lg font-semibold text-slate-900 truncate">首页 Dashboard</h1>
-            <p id="page-subtitle" class="text-xs text-slate-400 truncate"></p>
+            <h1 id="page-title" class="display-title text-base md:text-xl font-semibold text-ink truncate">首页 Dashboard</h1>
+            <p id="page-subtitle" class="text-xs text-stone truncate"></p>
           </div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
-          <span id="sync-badge" class="hidden sm:inline text-[11px] text-slate-500 max-w-[10rem] md:max-w-xs truncate">未登录</span>
-          <span id="today-date" class="hidden md:inline text-sm text-slate-500"></span>
+          <span id="sync-badge" class="hidden sm:inline text-[11px] text-stone max-w-[10rem] md:max-w-xs truncate px-2 py-1 rounded-full bg-white/35 border border-white/40">未登录</span>
+          <span id="today-date" class="hidden md:inline text-sm text-stone"></span>
         </div>
       </header>
       <main id="view" class="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8"></main>
@@ -126,29 +338,6 @@ let syncing = false;
 const WORD_STATUS = { NEW:'new', LEARNING:'learning', MASTERED:'mastered' };
 const PLAN = { TOTAL_DAYS:16, NEW_PER_DAY:200, MISTAKE_PER_DAY:300, REVIEW_LAG:2 };
 
-const SEED = [
-  {id:1,word:'abate',phonetic:'/əˈbeɪt/',definition:'vt./vi. 减弱，减轻，缓和'},
-  {id:2,word:'aberrant',phonetic:'/æˈberənt/',definition:'adj. 异常的，反常的'},
-  {id:3,word:'abscond',phonetic:'/əbˈskɒnd/',definition:'vi. 潜逃，逃匿'},
-  {id:4,word:'abstemious',phonetic:'/æbˈstiːmiəs/',definition:'adj. 有节制的，节俭的'},
-  {id:5,word:'admonish',phonetic:'/ədˈmɒnɪʃ/',definition:'vt. 告诫，劝告'},
-  {id:6,word:'aesthetic',phonetic:'/iːsˈθetɪk/',definition:'adj. 审美的，美学的'},
-  {id:7,word:'alacrity',phonetic:'/əˈlækrəti/',definition:'n. 欣然同意，乐意'},
-  {id:8,word:'ameliorate',phonetic:'/əˈmiːliəreɪt/',definition:'vt. 改善，改良'},
-  {id:9,word:'anachronism',phonetic:'/əˈnækrənɪzəm/',definition:'n. 时代错误，过时之物'},
-  {id:10,word:'anomaly',phonetic:'/əˈnɒməli/',definition:'n. 异常，反常'},
-  {id:11,word:'antipathy',phonetic:'/ænˈtɪpəθi/',definition:'n. 反感，厌恶'},
-  {id:12,word:'apathy',phonetic:'/ˈæpəθi/',definition:'n. 冷漠，无动于衷'},
-  {id:13,word:'appease',phonetic:'/əˈpiːz/',definition:'vt. 平息，安抚'},
-  {id:14,word:'arbitrary',phonetic:'/ˈɑːbɪtrəri/',definition:'adj. 任意的，武断的'},
-  {id:15,word:'arduous',phonetic:'/ˈɑːdjuəs/',definition:'adj. 费力的，艰巨的'},
-  {id:16,word:'articulate',phonetic:'/ɑːˈtɪkjuleɪt/',definition:'adj. 善于表达的；vt. 清晰表达'},
-  {id:17,word:'assuage',phonetic:'/əˈsweɪdʒ/',definition:'vt. 缓和，减轻'},
-  {id:18,word:'audacious',phonetic:'/ɔːˈdeɪʃəs/',definition:'adj. 大胆的，鲁莽的'},
-  {id:19,word:'austere',phonetic:'/ɒˈstɪə/',definition:'adj. 朴素的，严厉的'},
-  {id:20,word:'belie',phonetic:'/bɪˈlaɪ/',definition:'vt. 掩饰，与…不符'},
-];
-
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function makeId(p='id'){ return `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`; }
 function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -159,25 +348,44 @@ function shuffle(arr){ const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=
 function wrapWord(w){
   return {
     ...w,
-    status: WORD_STATUS.NEW,
-    learnedDay: null,
-    targetDay: null,
-    mistakeLevel: 0,
-    reviewCount: 0,
-    lastReviewTime: null,
+    status: w.status || WORD_STATUS.NEW,
+    learnedDay: w.learnedDay ?? null,
+    targetDay: w.targetDay ?? null,
+    importOrder: w.importOrder ?? null,
+    mistakeLevel: w.mistakeLevel || 0,
+    unknownCount: w.unknownCount || 0,
+    reviewCount: w.reviewCount || 0,
+    lastReviewTime: w.lastReviewTime || null,
     contextSentence: w.contextSentence || '',
   };
+}
+
+function byImportOrder(a, b){
+  const ao = a.importOrder != null ? a.importOrder : (a.id || 0);
+  const bo = b.importOrder != null ? b.importOrder : (b.id || 0);
+  if(ao !== bo) return ao - bo;
+  return String(a.word||'').localeCompare(String(b.word||''));
 }
 
 function defaultBook(){
   return {
     id: makeId('book'),
-    name: 'KMF 核心词',
+    name: '我的 GRE 词书',
     currentPlanDay: 1,
-    words: SEED.map(wrapWord),
+    words: [], // 默认 0 词，由你按天上传
     practiceHistory: [],
     progress: { wordsLearnedToday:0, todayTarget:0, todayTargetDate:null, lastActiveDate:todayStr() },
   };
+}
+
+function countByTargetDay(){
+  const map = {};
+  for(let d=1; d<=PLAN.TOTAL_DAYS; d++) map[d]=0;
+  for(const w of activeBook().words){
+    const d = w.targetDay;
+    if(d>=1 && d<=PLAN.TOTAL_DAYS) map[d] = (map[d]||0)+1;
+  }
+  return map;
 }
 
 function loadState(){
@@ -225,16 +433,24 @@ function buildTodayQueue(){
   const book = activeBook();
   const all = book.words;
   const day = book.currentPlanDay;
-  if(day>=10) return shuffle(all.filter(w=>w.mistakeLevel>0)).slice(0, PLAN.MISTAKE_PER_DAY);
+  // 注意：不再乱序。严格按导入顺序 importOrder 出现。
+  if(day>=10 && day<=PLAN.TOTAL_DAYS){
+    return all.filter(w=>w.mistakeLevel>0).sort(byImportOrder).slice(0, PLAN.MISTAKE_PER_DAY);
+  }
   let newWords=[];
-  if(day<=7){
-    const learned = all.filter(w=>w.learnedDay===day).length;
-    const allowance = Math.max(0, Math.min(20, PLAN.NEW_PER_DAY) - learned);
+  if(day>=1 && day<=7){
     const pool = all.filter(w=>w.status===WORD_STATUS.NEW && w.learnedDay===null);
-    newWords = shuffle(pool).slice(0, allowance);
+    // 优先：指定分配到当天的词（按上传顺序）
+    newWords = pool.filter(w=>w.targetDay===day).sort(byImportOrder);
+    // 若当天没有指定词，才用未分配池（仍保持导入顺序）
+    if(!newWords.length){
+      newWords = pool.filter(w=>w.targetDay==null || w.targetDay===undefined).sort(byImportOrder);
+    }
   }
   let review=[];
-  if(day>=3) review = all.filter(w=>w.learnedDay===day-PLAN.REVIEW_LAG);
+  if(day>=3 && day<=9){
+    review = all.filter(w=>w.learnedDay===day-PLAN.REVIEW_LAG).sort(byImportOrder);
+  }
   return [...newWords, ...review];
 }
 
@@ -353,6 +569,7 @@ function gradeWord(id, known){
   } else {
     w.status = WORD_STATUS.LEARNING;
     w.mistakeLevel = Math.min(2, (w.mistakeLevel||0)+1);
+    w.unknownCount = (w.unknownCount||0) + 1;
   }
   if(w.learnedDay==null) w.learnedDay = book.currentPlanDay;
   w.reviewCount = (w.reviewCount||0)+1;
@@ -376,10 +593,17 @@ function advanceDay(){
   return false;
 }
 
-function appendWords(lines){
+function appendWords(lines, options={}){
   const book = activeBook();
-  const by = new Map(book.words.map(w=>[w.word.toLowerCase(),w]));
+  const by = new Map(book.words.map(w=>[String(w.word).toLowerCase(),w]));
   let maxId = book.words.reduce((m,w)=>Math.max(m,w.id||0),0);
+  let maxOrder = book.words.reduce((m,w)=>Math.max(m, w.importOrder||0), 0);
+  let targetDay = options.targetDay;
+  if(targetDay!=null && targetDay!==''){
+    targetDay = parseInt(targetDay, 10);
+    if(!Number.isFinite(targetDay) || targetDay<1 || targetDay>PLAN.TOTAL_DAYS) targetDay=null;
+  } else targetDay=null;
+
   let added=0, skipped=0; const dups=[];
   for(const line of lines){
     const parts = line.split(/\t+/).map(s=>s.trim()).filter(Boolean);
@@ -387,18 +611,125 @@ function appendWords(lines){
     const word = parts[0];
     const key = word.toLowerCase();
     if(by.has(key)){ skipped++; dups.push(word); continue; }
-    maxId++;
+    maxId++; maxOrder++;
     const rec = wrapWord({
       id:maxId, word,
       phonetic: parts.length>=3?parts[1]:'',
       definition: parts.length>=3?parts[2]:parts[1],
+      targetDay,
+      importOrder: maxOrder,
     });
     book.words.push(rec);
     by.set(key, rec);
     added++;
   }
   persist();
-  return {added, skipped, duplicateWords:dups, total:book.words.length};
+  return {added, skipped, duplicateWords:dups, total:book.words.length, targetDay};
+}
+
+/** 清空指定天数（targetDay）导入的单词 */
+function clearWordsByDay(day){
+  day = parseInt(day, 10);
+  const book = activeBook();
+  const before = book.words.length;
+  book.words = book.words.filter(w => w.targetDay !== day);
+  persist();
+  return { removed: before - book.words.length, left: book.words.length, day };
+}
+
+/** 清空全部词库（默认空库，不灌样例词） */
+function clearAllWords(){
+  const book = activeBook();
+  const n = book.words.length;
+  book.words = [];
+  book.progress = { wordsLearnedToday:0, todayTarget:0, todayTargetDate:null, lastActiveDate:todayStr() };
+  persist();
+  return n;
+}
+
+function wordsOfDay(day){
+  return activeBook().words.filter(w => w.targetDay === day).sort(byImportOrder);
+}
+
+function isHardWord(w){
+  return (w.unknownCount||0) >= 2 || (w.mistakeLevel||0) >= 2;
+}
+
+/** 导出 Word（HTML 兼容 .doc，WPS/Word 可打开，含可点击勾选框） */
+function exportDaysToWord(days){
+  days = [...new Set(days.map(d=>parseInt(d,10)).filter(d=>d>=1&&d<=PLAN.TOTAL_DAYS))].sort((a,b)=>a-b);
+  if(!days.length) throw new Error('请至少选择一天');
+
+  const sections = days.map(day=>{
+    const list = wordsOfDay(day);
+    const unknown = list.filter(w=>w.status!==WORD_STATUS.MASTERED).length;
+    const rows = list.map((w,i)=>{
+      const mastered = w.status === WORD_STATUS.MASTERED;
+      const hard = isHardWord(w);
+      const bg = hard ? 'background-color:#FFE566;' : '';
+      const wordCell = hard
+        ? `<b style="background-color:#FFE566;">${escapeHtml(w.word)}</b>`
+        : escapeHtml(w.word);
+      // Word/WPS 可点击的勾选框；导出时按网站掌握状态预勾选
+      const check = mastered
+        ? `<input type="checkbox" checked="checked" />`
+        : `<input type="checkbox" />`;
+      return `<tr style="${bg}">
+        <td style="border:1px solid #000;text-align:center;padding:4px 6px;">${i+1}</td>
+        <td style="border:1px solid #000;text-align:center;padding:4px 6px;">${wordCell}</td>
+        <td style="border:1px solid #000;text-align:center;padding:4px 6px;">${escapeHtml(w.phonetic||'')}</td>
+        <td style="border:1px solid #000;padding:4px 6px;">${escapeHtml(w.definition||'')}</td>
+        <td style="border:1px solid #000;text-align:center;padding:4px 6px;">${check}<br/><span style="font-size:10px;color:#666;">${mastered?'已掌握':'未掌握'}</span></td>
+      </tr>`;
+    }).join('');
+
+    const title = `第${day}天 共 ${list.length} 个单词　　${unknown} 个未掌握`;
+    return `
+      <p style="color:red;text-align:center;font-size:14pt;font-weight:bold;margin:18px 0 8px;">${escapeHtml(title)}</p>
+      <table style="border-collapse:collapse;width:100%;font-size:11pt;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:6px;width:8%;">序号</th>
+            <th style="border:1px solid #000;padding:6px;width:18%;">单词</th>
+            <th style="border:1px solid #000;padding:6px;width:18%;">音标</th>
+            <th style="border:1px solid #000;padding:6px;width:40%;">翻译</th>
+            <th style="border:1px solid #000;padding:6px;width:16%;">掌握</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="5" style="border:1px solid #000;text-align:center;padding:8px;">该天暂无单词</td></tr>'}</tbody>
+      </table>
+      <p style="font-size:9pt;color:#666;margin-top:4px;">黄底 = 多次未掌握（unknown≥2 或荧光笔重点）；勾选框可在 Word/WPS 中点击修改。</p>
+    `;
+  }).join('<br/>');
+
+  const dayLabel = days.map(d=>`D${d}`).join('+');
+  const html = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+<head>
+<meta charset="utf-8" />
+<title>GRE词表 ${escapeHtml(dayLabel)}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
+<style>
+  body{font-family:"Times New Roman","宋体",serif;}
+  table{border-collapse:collapse;}
+  th{font-weight:bold;text-align:center;}
+</style>
+</head>
+<body>
+  <p style="text-align:center;font-size:16pt;font-weight:bold;">GRE 词表导出</p>
+  <p style="text-align:center;font-size:10pt;color:#444;">按导入背诵顺序 · 含网站掌握状态 · 黄底为多次未掌握</p>
+  ${sections}
+</body>
+</html>`;
+
+  const blob = new Blob(['\uFEFF', html], {type:'application/msword;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `GRE词表_${dayLabel}.doc`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  return { days, total: days.reduce((s,d)=>s+wordsOfDay(d).length, 0) };
 }
 
 
@@ -626,14 +957,26 @@ function persistAuthSide(){
   });
 }
 
+function explainGhError(err){
+  const msg = String(err?.message || err || '');
+  if(/Resource not accessible by personal access token/i.test(msg)){
+    return 'Token 权限不足。细粒度 Token 请在 Account permissions 里把 Gists 设为 Read and write，并把 Profile 设为 Read；更省事可改用 Classic Token，只勾选 gist。';
+  }
+  if(/Bad credentials/i.test(msg)) return 'Token 无效或已撤销，请重新创建并粘贴。';
+  if(/Not Found/i.test(msg)) return '找不到资源：请确认 Token 未过期，且具备 Gists 权限。';
+  return msg;
+}
+
 async function githubLogin(token, opts={}){
   const clean = String(token||'').trim();
   if(!clean) throw new Error('请粘贴 GitHub Token');
-  if(!clean.startsWith('ghp_') && !clean.startsWith('github_pat_')){
-    // 仍允许，但提示
-  }
   cloud.token = clean;
-  const user = await ghFetch('/user');
+  let user;
+  try{
+    user = await ghFetch('/user');
+  }catch(e){
+    throw new Error(explainGhError(e));
+  }
   cloud.login = user.login;
   cloud.gistId = opts.gistId || loadAuthMeta()?.gistId || null;
   cloud.autoSync = opts.autoSync !== false;
@@ -666,9 +1009,13 @@ async function githubLogin(token, opts={}){
     });
   }
 
-  const pull = await pullFromGist();
-  // 若没拉到更新，把本地推上去，保证两端有底
-  if(!pull.pulled) await pushToGist();
+  let pull;
+  try{
+    pull = await pullFromGist();
+    if(!pull.pulled) await pushToGist();
+  }catch(e){
+    throw new Error(explainGhError(e));
+  }
   updateSyncBadge(`已登录 @${cloud.login}`);
   window.dispatchEvent(new Event('gre:progress'));
   return { user, pull };
@@ -737,7 +1084,7 @@ function formatSyncTime(ts){
 
 // ---------- Views ----------
 const routes = [
-  {key:'dashboard', label:'首页 Dashboard', subtitle:'总览你的备考进度与今日计划', icon:'🏠'},
+  {key:'dashboard', label:'首页 Dashboard', subtitle:'喷泉工坊 · 今日进度总览', icon:'🏛️'},
   {key:'vocab', label:'单词记忆', subtitle:'翻转卡片 · 攻克核心词汇', icon:'📚'},
   {key:'mistakes', label:'错词本', subtitle:'手抄错词与荧光笔重点', icon:'📝'},
   {key:'practice', label:'真题演练', subtitle:'阅读语境联动 · 哪里不会点哪里', icon:'🎯'},
@@ -749,33 +1096,37 @@ function renderDashboard(){
   const task = getTodayTask();
   const s = getStats();
   return `<div class="max-w-5xl mx-auto space-y-6 view-fade">
-    <div class="bg-white rounded-2xl p-6 border border-slate-200">
-      <h2 class="text-lg font-semibold">欢迎回来</h2>
-      <p class="text-sm text-slate-400 mt-1">「${escapeHtml(task.bookName)}」· 第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal}</p>
-      <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        ${statBox('词库', s.total)}
-        ${statBox('未学', s.newCount,'text-sky-600')}
+    <section class="glass-panel p-7 md:p-9 relative overflow-hidden">
+      <div class="absolute -right-8 -top-10 w-40 h-40 rounded-full bg-water/20 blur-2xl pointer-events-none"></div>
+      <p class="text-[11px] tracking-[0.2em] uppercase text-stone mb-2">Fountain Atelier</p>
+      <h2 class="display-title text-3xl md:text-4xl font-semibold text-ink leading-tight">静心一刻，把今天的词背完</h2>
+      <p class="text-sm text-stone mt-3 max-w-xl leading-relaxed">「${escapeHtml(task.bookName)}」· 第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal}。界面只负责安静陪你，进度与词序都按你自己的节奏。</p>
+      <div class="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        ${statBox('词库', s.total,'text-ink')}
+        ${statBox('未学', s.newCount,'text-water')}
         ${statBox('错词', s.mistakeCount,'text-accent')}
         ${statBox('语境句', s.contextCount,'text-brand-600')}
       </div>
-      <div class="mt-5 flex flex-wrap gap-3">
-        <a href="#/vocab" class="bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-brand-700">开始背词</a>
-        <a href="#/practice" class="border border-slate-200 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-50">真题演练</a>
+      <div class="mt-7 flex flex-wrap gap-3">
+        <a href="#/vocab" class="btn-spring btn-primary">开始背词</a>
+        <a href="#/practice" class="btn-spring btn-ghost">真题演练</a>
+        <a href="#/settings" class="btn-spring btn-ghost">导入今日词表</a>
       </div>
-    </div>
-    <p class="text-xs text-slate-400">跨设备同步：打开「设置」用 GitHub Token 登录后，进度会写入你的私有 Gist，手机与电脑自动对齐。</p>
+    </section>
+    <p class="text-xs text-stone/80 px-1">灵感取自高级产品界面的克制气质：少装饰、强节奏、玻璃层次——让你看见界面仍想继续学，而不是被特效带走注意力。</p>
   </div>`;
 }
-function statBox(label,n,cls=''){ return `<div class="bg-slate-50 rounded-xl p-4 border border-slate-100"><p class="text-xs text-slate-400">${label}</p><p class="text-2xl font-bold mt-1 ${cls}">${n}</p></div>`; }
+function statBox(label,n,cls=''){ return `<div class="stat-tile"><p class="text-xs text-stone tracking-wide">${label}</p><p class="display-title text-3xl font-semibold mt-1 ${cls}">${n}</p></div>`; }
 
 let vocabQueue=[], vocabIdx=0, vocabFlipped=false, vocabKeyHandler=null;
 function renderVocab(){
   const task=getTodayTask(); const s=getStats();
   return `<div class="max-w-2xl mx-auto view-fade space-y-4">
-    <div class="bg-white rounded-2xl p-6 border border-slate-200">
-      <h2 class="text-lg font-semibold">单词记忆 · 16 天冲刺</h2>
-      <p class="text-sm text-slate-400 mt-1">第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal} · 错词 ${s.mistakeCount}</p>
-      <button id="vocab-start" class="mt-4 bg-brand-600 text-white text-sm font-semibold px-5 py-2.5 rounded-lg hover:bg-brand-700">开始今日任务</button>
+    <div class="glass-panel p-7">
+      <p class="text-[11px] tracking-[0.18em] uppercase text-stone mb-2">Daily Flow</p>
+      <h2 class="display-title text-2xl font-semibold">单词记忆 · 16 天冲刺</h2>
+      <p class="text-sm text-stone mt-2">第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 今日 ${task.learnedToday}/${task.todayGoal} · 错词 ${s.mistakeCount}</p>
+      <button id="vocab-start" class="btn-spring btn-primary mt-5">开始今日任务</button>
     </div>
   </div>`;
 }
@@ -1022,11 +1373,11 @@ function renderSettings(){
         <p id="s-unlock-msg" class="text-xs text-slate-400"></p>
       </div>` : `
       <div class="mt-4 space-y-3 border-t border-slate-100 pt-4 ${logged?'opacity-60':''}">
-        <p class="text-sm font-medium text-slate-800">1. 创建 Token（仅勾选 gist 权限）</p>
+        <p class="text-sm font-medium text-slate-800">1. 创建 Token（推荐 Classic，最省事）</p>
         <ol class="text-xs text-slate-500 list-decimal pl-4 space-y-1">
-          <li>打开 <a class="text-brand-600 underline" target="_blank" rel="noopener" href="https://github.com/settings/tokens?type=beta">GitHub → Settings → Fine-grained tokens</a></li>
-          <li>权限里只开 <code class="bg-slate-100 px-1 rounded">Gists: Read and write</code>（不要给 repo 权限）</li>
-          <li>复制 Token，粘贴到下方（形如 github_pat_… 或 ghp_…）</li>
+          <li><strong>推荐：</strong>打开 <a class="text-brand-600 underline" target="_blank" rel="noopener" href="https://github.com/settings/tokens/new">创建 Classic Token</a>，勾选 <code class="bg-slate-100 px-1 rounded">gist</code>，生成后复制（以 ghp_ 开头）</li>
+          <li><strong>若坚持细粒度 Token：</strong>在 Account permissions 中设置 <code class="bg-slate-100 px-1 rounded">Gists = Read and write</code>，以及 <code class="bg-slate-100 px-1 rounded">Profile = Read</code>（缺一项就会报 Resource not accessible）</li>
+          <li>不要给 repo 权限；Token 只粘贴到本页，不要发到聊天/截图里</li>
         </ol>
         <input id="s-token" type="password" autocomplete="off" class="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="粘贴 GitHub Token" ${logged?'disabled':''} />
         <label class="flex items-start gap-2 text-xs text-slate-600">
@@ -1051,20 +1402,52 @@ function renderSettings(){
 
     <div class="bg-white rounded-2xl p-6 border">
       <h2 class="text-lg font-semibold">计划与词库</h2>
-      <p class="text-sm text-slate-400 mt-1">当前第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 词库 ${getStats().total} 词</p>
+      <p class="text-sm text-slate-400 mt-1">当前第 ${task.day}/${PLAN.TOTAL_DAYS} 天 · 词库 ${getStats().total} 词（默认空库，按天上传）</p>
+      <p class="text-xs text-slate-500 mt-2">已导入：${Object.entries(countByTargetDay()).filter(([d,n])=>n>0).map(([d,n])=>`第${d}天 ${n}词`).join(" · ") || "尚未按天导入单词"}</p>
+      <p class="text-xs text-emerald-700 mt-1">背词顺序：严格按你上传顺序，已关闭乱序。</p>
       <button id="s-advance" class="mt-4 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">推进到下一天</button>
       <span id="s-adv-msg" class="ml-2 text-xs text-slate-400"></span>
     </div>
+
     <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">增量导入（Excel 粘贴）</h2>
-      <p class="text-xs text-slate-400 mt-1">格式：单词[Tab]音标[Tab]释义，每行一词；重复自动拦截</p>
-      <textarea id="s-import" rows="6" class="mt-3 w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="abate\t/əˈbeɪt/\t减弱"></textarea>
-      <button id="s-import-btn" class="mt-3 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">增量导入</button>
+      <h2 class="text-lg font-semibold">按天增量导入</h2>
+      <p class="text-xs text-slate-400 mt-1">格式：单词[Tab]音标[Tab]释义；导入顺序 = 背诵顺序；重复自动拦截</p>
+      <label class="block text-sm mt-3 mb-1">分配到第几天？</label>
+      <select id="s-target-day" class="border rounded-lg px-3 py-2 text-sm">
+        ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>`<option value="${i+1}">第 ${i+1} 天</option>`).join('')}
+      </select>
+      <textarea id="s-import" rows="6" class="mt-3 w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="numinous\t/ˈnuːmɪnəs/\tadj. 神圣的"></textarea>
+      <button id="s-import-btn" class="mt-3 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">导入到指定天</button>
       <p id="s-import-msg" class="text-xs mt-2"></p>
     </div>
+
     <div class="bg-white rounded-2xl p-6 border">
-      <h2 class="text-lg font-semibold">数据</h2>
-      <button id="s-reset" class="mt-3 text-sm text-accent border border-red-200 px-4 py-2 rounded-lg">重置为内置 20 词样例</button>
+      <h2 class="text-lg font-semibold">导出 Word 词表</h2>
+      <p class="text-xs text-slate-400 mt-1">格式对齐你的 List 表格；可多选天数；含掌握勾选框；多次未掌握标黄</p>
+      <div id="s-export-days" class="mt-3 grid grid-cols-4 sm:grid-cols-8 gap-2 text-xs">
+        ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>{
+          const d=i+1; const n=countByTargetDay()[d]||0;
+          return `<label class="flex items-center gap-1 border rounded-lg px-2 py-1.5 ${n? 'bg-white':'bg-slate-50 text-slate-300'}">
+            <input type="checkbox" value="${d}" class="s-ex-day" ${n?'':'disabled'} />
+            <span>D${d}<span class="text-slate-400">(${n})</span></span>
+          </label>`;
+        }).join('')}
+      </div>
+      <button id="s-export-btn" class="mt-4 bg-brand-600 text-white text-sm font-semibold px-4 py-2 rounded-lg">导出选中天为 Word</button>
+      <p id="s-export-msg" class="text-xs mt-2 text-slate-400"></p>
+    </div>
+
+    <div class="bg-white rounded-2xl p-6 border">
+      <h2 class="text-lg font-semibold">清空词库</h2>
+      <p class="text-xs text-slate-400 mt-1">可只清空某一天导入的词，或清空全部（不会恢复内置样例词）</p>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <select id="s-clear-day" class="border rounded-lg px-3 py-2 text-sm">
+          ${[...Array(PLAN.TOTAL_DAYS)].map((_,i)=>`<option value="${i+1}">第 ${i+1} 天</option>`).join('')}
+        </select>
+        <button id="s-clear-day-btn" class="text-sm border border-amber-300 text-amber-800 bg-amber-50 px-4 py-2 rounded-lg">清空该天单词</button>
+        <button id="s-clear-all" class="text-sm text-accent border border-red-200 px-4 py-2 rounded-lg">清空全部词库</button>
+      </div>
+      <p id="s-clear-msg" class="text-xs mt-2"></p>
     </div>
   </div>`;
 }
@@ -1117,6 +1500,7 @@ function mountSettings(root){
     catch(e){ setMsg('❌ '+(e.message||e), false); }
   });
 
+  const td0=root.querySelector('#s-target-day'); if(td0) td0.value=String(getTodayTask().day);
   root.querySelector('#s-advance')?.addEventListener('click', ()=>{
     const ok=advanceDay();
     root.querySelector('#s-adv-msg').textContent=ok?`已推进到第 ${activeBook().currentPlanDay} 天`:'已是最后一天';
@@ -1124,14 +1508,41 @@ function mountSettings(root){
   });
   root.querySelector('#s-import-btn')?.addEventListener('click', ()=>{
     const lines=root.querySelector('#s-import').value.split(/\n/).map(l=>l.trim()).filter(Boolean);
-    const r=appendWords(lines);
-    root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词，当前共 ${r.total} 词。</span>`+
+    const day=root.querySelector('#s-target-day').value;
+    const r=appendWords(lines, { targetDay: day });
+    root.querySelector('#s-import-msg').innerHTML=`<span class="text-brand-600">成功导入 ${r.added} 词到第 ${r.targetDay} 天；词库共 ${r.total} 词（按上传顺序背诵）。</span>`+
       (r.skipped?`<div class="mt-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">⚠️ 拦截 ${r.skipped} 个重复：${r.duplicateWords.map(escapeHtml).join(', ')}</div>`:'');
     renderChrome();
+    setTimeout(()=>renderRoute(), 300);
   });
-  root.querySelector('#s-reset')?.addEventListener('click', ()=>{
-    if(!confirm('确定重置？本地进度将清空（云端需手动再推送才会覆盖）。')) return;
-    const book=defaultBook(); state={activeBookId:book.id, wordbooks:[book]}; persist(); location.reload();
+  root.querySelector('#s-export-btn')?.addEventListener('click', ()=>{
+    const days=[...root.querySelectorAll('.s-ex-day:checked')].map(el=>el.value);
+    const box=root.querySelector('#s-export-msg');
+    try{
+      const r=exportDaysToWord(days);
+      box.className='text-xs text-brand-600';
+      box.textContent=`已导出 ${r.days.length} 天共 ${r.total} 词（.doc，可用 WPS/Word 打开并打勾）。`;
+    }catch(e){
+      box.className='text-xs text-accent';
+      box.textContent=String(e.message||e);
+    }
+  });
+  root.querySelector('#s-clear-day-btn')?.addEventListener('click', ()=>{
+    const day=root.querySelector('#s-clear-day').value;
+    if(!confirm(`确定清空「第 ${day} 天」导入的全部单词？`)) return;
+    const r=clearWordsByDay(day);
+    root.querySelector('#s-clear-msg').className='text-xs text-brand-600';
+    root.querySelector('#s-clear-msg').textContent=`已删除第 ${r.day} 天 ${r.removed} 词，词库剩余 ${r.left} 词。`;
+    renderChrome();
+    setTimeout(()=>renderRoute(), 300);
+  });
+  root.querySelector('#s-clear-all')?.addEventListener('click', ()=>{
+    if(!confirm('确定清空全部词库？不会恢复任何内置样例词。')) return;
+    const n=clearAllWords();
+    root.querySelector('#s-clear-msg').className='text-xs text-brand-600';
+    root.querySelector('#s-clear-msg').textContent=`已清空 ${n} 词，当前为 0 词空库。`;
+    renderChrome();
+    setTimeout(()=>renderRoute(), 300);
   });
 }
 
